@@ -19,6 +19,11 @@ Commands per ecosystem for `/factory:upgrade`. The repo's `.factory.toml` wins w
 | npm | `npm install <name>@<version>` from the manifest's directory (updates the lockfile) | `npm ci` |
 | docker | edit the tag in every listed `image:` / `FROM` line, same suffix (`-alpine`, `-slim`) | rebuild if the repo has a build check |
 
+**Fully pinned files** (every transitive dependency pinned, as `pip freeze` writes them): never bump a package
+whose `required_by` names another candidate on its own — the parent pins its exact version and `pip install -r`
+fails. Bump the parent(s), install with the resolver, `pip check`, then copy the resolved versions of everything
+that moved back into the file (`python -m pip freeze`, filtered to the names already in it).
+
 A worktree must never share a virtualenv or `node_modules` with another checkout when it upgrades — installing
 there would change every other worktree. The repo's `[worktree] setup` creates private ones.
 
@@ -42,14 +47,16 @@ there would change every other worktree. The repo's `[worktree] setup` creates p
 
 - `[upgrade] deprecation_check` commands produce output with warnings visible (e.g. pytest with warnings shown,
   a build log). Pipe it: `<command> 2>&1 | factory upgrade deprecations` — it exits 1 while any warning comes from
-  our code, and lists `file:line category: message`.
+  our code, and lists `file:line category: message`. For a tool run in a subfolder (`cd web && npm run build`), add
+  `--base web` so its relative paths resolve.
 - Fix by calling the replacement the warning or the release notes name. Never silence a warning with a filter.
 - Dependency-level deprecations (`npm warn deprecated <pkg>`) become an upgrade or replacement candidate for the
   next run, or a task.
 
 ## Tasks and PRs
 
-- Task: `[tasks] new` with `{title}`, `{body_file}`, `{priority}`; without one, `gh issue create --title … --body-file …`.
+- Task: `factory task new --title "<title>" --body-file <file> [--priority N]` (it runs the repo's `[tasks] new`
+  with every value shell-quoted). Duplicate check first: `factory task exists "<title start>"`.
   Title: `Upgrade <name> <from> → <to>` (risky) or `Adopt <feature> from <name> <version>` (opportunity).
 - PR titles: `deps(<ecosystem>): <n> safe upgrades`, `deps: <name> <from> → <to>`, `security: <name> <to> (<advisory>)`.
-- One branch per PR, cut from the run's branch, so each PR can land alone.
+- One branch per PR (`$FACTORY_BRANCH-<group>`), cut from the default branch, so each PR can land alone.

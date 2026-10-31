@@ -10,6 +10,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"$FACTORY_RUN\" ] || exit 0; PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}\" python3 -m sfactory.guard",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

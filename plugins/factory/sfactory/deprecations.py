@@ -30,7 +30,7 @@ class Deprecation:
         return asdict(self)
 
 
-def _ours(path: str, root: Path) -> str | None:
+def _ours(path: str, root: Path, base: Path | None = None) -> str | None:
     if any(v in path for v in VENDOR):
         return None
     p = Path(path)
@@ -39,14 +39,18 @@ def _ours(path: str, root: Path) -> str | None:
             return p.resolve().relative_to(root.resolve()).as_posix()
         except ValueError:
             return None
-    return p.as_posix() if (root / p).exists() else None
+    for start in ([base] if base else []) + [root]:
+        if (start / p).exists():
+            return (start / p).resolve().relative_to(root.resolve()).as_posix()
+    return None
 
 
-def parse(text: str, root: Path) -> list[Deprecation]:
+def parse(text: str, root: Path, base: Path | None = None) -> list[Deprecation]:
+    """`base`: the directory the tool ran in (relative paths in its output are relative to it)."""
     found: list[Deprecation] = []
     for line in text.splitlines():
         if m := PY.match(line):
-            rel = _ours(m.group("file"), root)
+            rel = _ours(m.group("file"), root, base)
             if rel:
                 found.append(Deprecation("ours", m.group("cat"), m.group("msg").strip(), rel, int(m.group("line"))))
         elif m := NPM.search(line):
@@ -54,7 +58,7 @@ def parse(text: str, root: Path) -> list[Deprecation]:
         elif m := NODE.search(line):
             found.append(Deprecation("runtime", m.group("code"), m.group("msg").strip()))
         elif m := JS.search(line):
-            rel = _ours(m.group("file"), root)
+            rel = _ours(m.group("file"), root, base)
             if rel:
                 found.append(Deprecation("ours", "deprecated", m.group("msg").strip(), rel, int(m.group("line"))))
     return list(dict.fromkeys(found))

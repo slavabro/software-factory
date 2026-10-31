@@ -11,6 +11,7 @@ import itertools
 import os
 import platform
 import plistlib
+import shlex
 import shutil
 import subprocess
 from pathlib import Path
@@ -73,7 +74,7 @@ def systemd_units(cfg: Config, capability: str, expr: str) -> tuple[str, str]:
     service = (
         f"[Unit]\nDescription=software-factory {capability} for {cfg.name}\n\n"
         f"[Service]\nType=oneshot\nWorkingDirectory={cfg.root}\nEnvironment=PATH={os.environ.get('PATH', '/usr/bin:/bin')}\n"
-        f"ExecStart={' '.join(command(cfg, capability))}\n"
+        f"ExecStart={shlex.join(command(cfg, capability))}\n"
     )
     timer = f"[Unit]\nDescription=software-factory {capability} schedule for {cfg.name}\n\n[Timer]\nOnCalendar={on_calendar}\nPersistent=true\n\n[Install]\nWantedBy=timers.target\n"
     return service, timer
@@ -81,7 +82,7 @@ def systemd_units(cfg: Config, capability: str, expr: str) -> tuple[str, str]:
 
 def crontab_line(cfg: Config, capability: str, expr: str) -> str:
     parse_cron(expr)
-    return f"{expr} {' '.join(command(cfg, capability))} >/dev/null 2>&1"
+    return f"{expr} {shlex.join(command(cfg, capability))} >/dev/null 2>&1"
 
 
 def backend() -> str:
@@ -125,7 +126,8 @@ def install(cfg: Config, capability: str, print_only: bool = False) -> str:
         (unit_dir / f"{name}.timer").write_text(timer)
         subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
         subprocess.run(["systemctl", "--user", "enable", "--now", f"{name}.timer"], check=True)
-        return f"systemd: {name}.timer enabled ({expr})"
+        return (f"systemd: {name}.timer enabled ({expr}); to run while logged out: "
+                "`loginctl enable-linger $USER`")
     return "Add this line with `crontab -e`:\n" + crontab_line(cfg, capability, expr)
 
 

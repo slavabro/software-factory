@@ -20,12 +20,11 @@ class Candidate:
     current: str
     latest: str
     bump: str  # patch | minor | major
-    manifest: str
-    line: int
-    spec: str
     risky: bool
     newer_count: int
+    locations: list[str] = field(default_factory=list)  # every manifest:line that pins it
     notes: list[str] = field(default_factory=list)
+    required_by: list[str] = field(default_factory=list)  # other scanned packages that depend on it (move together)
 
 
 @dataclass
@@ -59,21 +58,30 @@ def scan(cfg: Config, fetch: registries.Fetch = registries.fetch_json, workers: 
     info = {k: v for k, v, _ in looked if v}
     errors = [e for _, _, e in looked if e]
 
-    candidates, fresh = [], 0
+    required_by: dict[str, list[str]] = {}
+    for (eco, name), found in info.items():
+        for req in found[2]:
+            required_by.setdefault(req, []).append(name)
+
+    grouped: dict[tuple[str, str, str], list] = {}
     for d in deps:
-        found = info.get((d.ecosystem, d.name))
+        grouped.setdefault((d.ecosystem, d.name, d.current), []).append(d)
+    candidates, fresh = [], 0
+    for (eco, name, current), group in grouped.items():
+        found = info.get((eco, name))
         if not found:
             continue
-        all_versions, notes = found
-        newer = versions.newer(d.current, all_versions, same_shape=d.ecosystem == "docker")
+        all_versions, notes, _ = found
+        newer = versions.newer(current, all_versions, eco)
         if not newer:
             fresh += 1
             continue
         latest = newer[-1]
-        bump = versions.bump(d.current, latest)
         candidates.append(Candidate(
-            d.ecosystem, d.name, d.current, latest, bump, d.manifest, d.line, d.spec,
-            risky=_match(d.name, up.risky), newer_count=len(newer), notes=notes,
+            eco, name, current, latest, versions.bump(current, latest),
+            risky=_match(name, up.risky), newer_count=len(newer),
+            locations=[f"{d.manifest}:{d.line}" for d in group], notes=notes,
+            required_by=sorted(set(required_by.get(name, [])) & {n for _, n in unique}) if eco == "pip" else [],
         ))
     order = {"major": 0, "minor": 1, "patch": 2}
     candidates.sort(key=lambda c: (c.risky, order.get(c.bump, 3), c.ecosystem, c.name))
@@ -81,11 +89,11 @@ def scan(cfg: Config, fetch: registries.Fetch = registries.fetch_json, workers: 
 
 
 def markdown(result: ScanResult) -> str:
-    rows = ["| Package | Ecosystem | Now | Latest | Bump | Risky | Notes |", "|---|---|---|---|---|---|---|"]
+    rows = ["| Package | Ecosystem | Now | Latest | Bump | Risky | Required by | Notes |", "|---|---|---|---|---|---|---|---|"]
     for c in result.candidates:
         rows.append(
             f"| {c.name} | {c.ecosystem} | {c.current} | {c.latest} | {c.bump} | {'yes — task' if c.risky else 'no'} | "
-            + (c.notes[0] if c.notes else "—") + " |"
+            f"{', '.join(c.required_by) or '—'} | " + (c.notes[0] if c.notes else "—") + " |"
         )
     tail = f"\n{len(result.candidates)} can move · {result.up_to_date} up to date"
     if result.errors:

@@ -11,7 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins" / "factory"))
 
-from sfactory import config, deprecations, manifests, runner, schedule, upgrade, versions  # noqa: E402
+from sfactory import config, deprecations, guard, manifests, runner, schedule, upgrade, versions  # noqa: E402
 
 
 def write(root: Path, rel: str, text: str) -> None:
@@ -34,11 +34,22 @@ class Repo(unittest.TestCase):
 
 
 class VersionTests(unittest.TestCase):
-    def test_releases_and_prereleases(self):
-        for v in ["1.2.3", "16-alpine", "16-bookworm", "3.13-slim", "2.0"]:
-            self.assertTrue(versions.is_release(v), v)
-        for v in ["2.0.0rc1", "1.0.0a1", "5.0.0-beta.1", "1.0.0.dev3", "4.0.0-next.3"]:
-            self.assertFalse(versions.is_release(v), v)
+    def test_releases_and_prereleases_per_ecosystem(self):
+        cases = {
+            "pip": (["1.2.3", "2.0", "2.0.post1", "2025.8.3"], ["2.0.0rc1", "1.0.0a1", "1.0.0alpha1", "1.0.0.dev3", "1.0b2"]),
+            "npm": (["19.3.1", "1.0"], ["6.0.0-insiders.1", "2.0.0-0", "1.0.0-pr.12", "4.0.0-next.3", "5.0.0-beta.1"]),
+            "docker": (["16-alpine", "16-bookworm", "3.13-slim", "1.32.1"], ["17-rc-alpine", "3.15.0rc1-slim", "2.0-experimental"]),
+        }
+        for eco, (good, bad) in cases.items():
+            for v in good:
+                self.assertTrue(versions.is_release(v, eco), (eco, v))
+            for v in bad:
+                self.assertFalse(versions.is_release(v, eco), (eco, v))
+
+    def test_plain_release_wins_a_tie_and_calver_is_never_major(self):
+        self.assertEqual(versions.newer("5.9.0", ["6.0.0-insiders.1", "6.0.0"], "npm"), ["6.0.0"])
+        self.assertEqual(versions.bump("2025.8.3", "2026.10.23"), "minor")
+        self.assertEqual(versions.bump("2025.8.3", "2025.10.1"), "patch")
 
     def test_bump_classes(self):
         self.assertEqual(versions.bump("1.2.3", "1.2.4"), "patch")
@@ -49,7 +60,7 @@ class VersionTests(unittest.TestCase):
 
     def test_docker_tags_compete_only_with_the_same_shape(self):
         tags = ["17-alpine", "17", "16.4-alpine", "18-alpine", "17-bookworm", "19-alpine-rc"]
-        self.assertEqual(versions.newer("16-alpine", tags, same_shape=True), ["17-alpine", "18-alpine"])
+        self.assertEqual(versions.newer("16-alpine", tags, "docker"), ["17-alpine", "18-alpine"])
 
 
 class ManifestTests(Repo):
@@ -78,7 +89,7 @@ class ScanTests(Repo):
         pages = {
             "https://pypi.org/pypi/requests/json": {"releases": {"2.31.0": [{}], "2.32.3": [{}], "3.0.0rc1": [{}]},
                                                     "info": {"project_urls": {"Changelog": "https://c", "Source": "https://github.com/psf/requests"}}},
-            "https://pypi.org/pypi/flask/json": {"releases": {"3.0.0": [{}]}, "info": {}},
+            "https://pypi.org/pypi/flask/json": {"releases": {"3.0.0": [{}]}, "info": {"requires_dist": ["requests>=2", "x ; extra == 'dev'"]}},
         }
 
         def fetch(url):
@@ -91,6 +102,8 @@ class ScanTests(Repo):
         self.assertEqual(set(by), {"requests", "postgres"})
         self.assertEqual((by["requests"].latest, by["requests"].bump, by["requests"].risky), ("2.32.3", "minor", False))
         self.assertIn("https://github.com/psf/requests/releases", by["requests"].notes)
+        self.assertEqual(by["requests"].required_by, ["flask"])
+        self.assertEqual(by["requests"].locations, ["requirements.txt:1"])
         self.assertTrue(by["postgres"].risky)
         self.assertEqual(result.candidates[-1].name, "postgres")  # risky sorts last
         self.assertEqual(result.up_to_date, 1)
@@ -126,6 +139,51 @@ class DeprecationTests(Repo):
         ours = [(d.file, d.line) for d in found if d.kind == "ours"]
         self.assertEqual(ours, [("app/core.py", 12), ("app/core.py", 20), ("web/src/a.ts", 4)])
         self.assertEqual({d.kind for d in found}, {"ours", "dependency", "runtime"})
+
+
+class ConfigAndTaskTests(Repo):
+    def test_unknown_key_or_wrong_type_is_an_error(self):
+        write(self.root, ".factory.toml", '[upgrade]\nriksy = ["postgres"]\n')
+        with self.assertRaises(config.ConfigError):
+            config.load(self.root)
+        write(self.root, ".factory.toml", '[upgrade]\nmax_prs = "3"\n')
+        with self.assertRaises(config.ConfigError):
+            config.load(self.root)
+
+    def test_default_tools_deny_merge_and_default_branch_push(self):
+        argv = runner.agent_argv(config.load(self.root), "/x")
+        denied = argv[argv.index("--disallowedTools") + 1]
+        allowed = argv[argv.index("--allowedTools") + 1]
+        for rule in ("Bash(gh pr merge*)", "Bash(git push*main*)", "Bash(git push*--force*)"):
+            self.assertIn(rule, denied)
+        for blanket in ("Bash(git *)", "Bash(gh *)", "Bash(python3 *)", "Bash(npx *)", "Bash(make *)"):
+            self.assertNotIn(blanket, allowed.split(","))
+
+    def test_task_values_are_shell_quoted(self):
+        from sfactory import cli
+
+        out = self.root / "out.txt"
+        write(self.root, ".factory.toml", f'[tasks]\nnew = "printf %s {{title}} > {out}"\n')
+        body = self.root / "b.md"
+        body.write_text("x")
+        title = 'Upgrade "postgres" $HOME 16 → 18; rm -rf x'
+        self.assertEqual(cli.main(["task", "new", "--title", title, "--body-file", str(body), "--repo", str(self.root)]), 0)
+        self.assertEqual(out.read_text(), title)
+
+
+class GuardTests(unittest.TestCase):
+    def test_blocks_merges_default_branch_pushes_and_writes(self):
+        for cmd in ["gh pr merge 12 --squash", "git push origin main", "git push origin HEAD:main",
+                    "make ci && git push -u origin main", "git push --force origin factory/x", "git push origin +factory/x",
+                    "gh api -X PUT repos/o/r/pulls/3/merge", "gh api repos/o/r/merges -f base=main", "gh repo delete o/r",
+                    "git push", "git push origin --delete factory/x"]:
+            self.assertIsNotNone(guard.check(cmd, "main"), cmd)
+
+    def test_allows_the_normal_flow(self):
+        for cmd in ["git push -u origin factory/upgrade-20261031-deps", "gh pr create --base main --title x --body-file f",
+                    "gh api repos/psf/requests/releases --paginate", "git merge origin/main", "git log origin/main..HEAD",
+                    "gh pr checks 12 --watch", "git push origin factory/upgrade-1-maintenance-tasks"]:
+            self.assertIsNone(guard.check(cmd, "main"), cmd)
 
 
 class RunnerAndScheduleTests(Repo):
@@ -185,12 +243,30 @@ class RunnerAndScheduleTests(Repo):
 
     def test_run_uses_origin_config_runs_agent_and_cleans_up(self):
         cfg = '[worktree]\nsetup = ["touch setup-ran"]\n[agent]\ncommand = ["sh", "-c", "test -f setup-ran && echo agent-ran {prompt}"]\n'
-        repo = self._origin({".factory.toml": cfg})
+        repo = self._origin({".factory.toml": cfg, ".gitignore": "setup-ran\n"})
         code, trees, home = self._run(repo)
         self.assertEqual((code, trees), (0, 1))  # nothing pushed -> worktree removed
         log = next((home / "logs").rglob("upgrade-*.log")).read_text()
         self.assertIn("agent-ran /factory:upgrade", log)
         self.assertFalse(list((home / "runs").rglob("*.lock")))
+
+    def test_unpushed_work_is_kept_not_deleted(self):
+        cfg = ('[agent]\ncommand = ["sh", "-c", "git checkout -q -b $FACTORY_BRANCH-deps && echo x > f && git add f && '
+               'git -c user.name=t -c user.email=t@t commit -qm wip"]\n')
+        repo = self._origin({".factory.toml": cfg})
+        code, trees, _ = self._run(repo)
+        self.assertEqual((code, trees), (0, 2))  # the worktree with the unpushed commit survives
+
+    def test_stale_lock_is_taken_over_live_one_is_not(self):
+        lock = self.root / "x.lock"
+        lock.write_text("999999")  # no such process
+        self.assertTrue(runner.acquire(lock))
+        self.assertFalse(runner.acquire(lock))  # held by us, alive
+        lock.unlink()
+
+    def test_timeout_kills_the_agent(self):
+        log = (self.root / "t.log").open("w")
+        self.assertEqual(runner._sh(["sleep", "30"], self.root, {"PATH": "/usr/bin:/bin"}, log, timeout=0.5), runner._TIMED_OUT)
 
     def test_dry_run_changes_nothing(self):
         cfg = config.load(self.root)

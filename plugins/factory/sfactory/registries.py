@@ -1,4 +1,6 @@
-"""Latest versions and release-notes links from the public registries (read-only, no credentials).
+"""Versions, release-notes links and (PyPI) requirements from the public registries (read-only, no credentials).
+
+Each lookup returns (versions, notes, requires).
 
 `fetch_json` is injectable so tests never touch the network.
 """
@@ -53,7 +55,7 @@ def _github(url: str | None) -> str | None:
     return f"https://github.com/{m.group(1)}/{m.group(2)}" if m else None
 
 
-def pypi(name: str, fetch: Fetch = fetch_json) -> tuple[list[str], list[str]]:
+def pypi(name: str, fetch: Fetch = fetch_json) -> tuple[list[str], list[str], list[str]]:
     data = fetch(f"https://pypi.org/pypi/{urllib.parse.quote(name)}/json")
     versions = [v for v, files in data.get("releases", {}).items() if files and not all(f.get("yanked") for f in files)]
     info = data.get("info", {})
@@ -62,20 +64,21 @@ def pypi(name: str, fetch: Fetch = fetch_json) -> tuple[list[str], list[str]]:
     repo = next((_github(u) for u in [*urls.values(), info.get("home_page")] if _github(u)), None)
     if repo:
         notes.append(f"{repo}/releases")
-    return versions, list(dict.fromkeys(notes))
+    requires = [re.split(r"[\s;<>=!~\[(]", req, 1)[0].lower().replace("_", "-") for req in info.get("requires_dist") or [] if "extra ==" not in req]
+    return versions, list(dict.fromkeys(notes)), requires
 
 
-def npm(name: str, fetch: Fetch = fetch_json) -> tuple[list[str], list[str]]:
+def npm(name: str, fetch: Fetch = fetch_json) -> tuple[list[str], list[str], list[str]]:
     data = fetch("https://registry.npmjs.org/" + name.replace("/", "%2F"))
     versions = [v for v, meta in data.get("versions", {}).items() if not meta.get("deprecated")]
     repo = data.get("repository") or {}
     repo_url = repo.get("url") if isinstance(repo, dict) else repo
     gh = _github(repo_url)
     notes = [f"{gh}/releases", f"{gh}/blob/HEAD/CHANGELOG.md"] if gh else []
-    return versions, notes
+    return versions, notes, []
 
 
-def docker(image: str, fetch: Fetch = fetch_json, pages: int = 3) -> tuple[list[str], list[str]]:
+def docker(image: str, fetch: Fetch = fetch_json, pages: int = 3) -> tuple[list[str], list[str], list[str]]:
     ns, _, repo = image.rpartition("/")
     ns = ns or "library"
     url = f"https://hub.docker.com/v2/repositories/{ns}/{repo}/tags?page_size=100&ordering=last_updated"
@@ -90,7 +93,7 @@ def docker(image: str, fetch: Fetch = fetch_json, pages: int = 3) -> tuple[list[
     notes = [hub]
     if ns != "library":
         notes.append(f"https://github.com/{ns}/{repo}/releases")
-    return tags, notes
+    return tags, notes, []
 
 
 LOOKUP = {"pip": pypi, "npm": npm, "docker": docker}

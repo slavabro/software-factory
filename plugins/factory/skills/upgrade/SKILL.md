@@ -7,15 +7,17 @@ argument-hint: "[package ...] [--report-only]"
 # Upgrade
 
 You own this repo's dependencies for one run. Everything repo-specific comes from its `.factory.toml` — read it
-first with `factory config`; never assume FamilyOffice (or any repo) conventions that the config doesn't state.
+first with `factory config`; never assume conventions from another repo that this config doesn't state. An
+unattended run sets `$FACTORY_BRANCH` (your branch prefix) and `$FACTORY_REPORT` (where the digest goes).
 Arguments: `$ARGUMENTS` (packages to limit to; `--report-only` = steps 1–3 and the report, no changes).
 
 The full playbook with commands per ecosystem: [references/playbook.md](references/playbook.md).
 
 ## 1. Scan
 
-`factory upgrade scan --json` → candidates (`current`, `latest`, `bump`, `risky`, `manifest`, `notes`). Skip any
-package that already has an open PR or task (`gh pr list --search "<name> in:title" --state open`).
+`factory upgrade scan --json` → candidates (`current`, `latest`, `bump`, `risky`, `locations`, `notes`,
+`required_by`). Skip a package that already has an open PR (`gh pr list --state open --search "<name> in:title"`)
+or task (`factory task exists "Upgrade <name>"`).
 
 ## 2. Read the notes — every version in between
 
@@ -36,17 +38,20 @@ we wrote ourselves.
 | Class | Rule | Outcome |
 |-------|------|---------|
 | security | any advisory fixed | first PR of the run, whatever the bump |
-| safe | patch/minor, no breaking change touching our usage | grouped into one PR per ecosystem |
-| breaking | major, or a breaking change we use, not `risky` | its own PR with the code changes |
+| safe | patch/minor library bump, no breaking change touching our usage | grouped into one PR per ecosystem |
+| breaking | major, a breaking change we use, or any runtime image / language version (they change what every test runs on) | its own PR with the code changes |
 | risky | name matches `[upgrade] risky`, or data/infra whose upgrade needs a migration or downtime | a task (`[tasks] new`) with the notes and a migration plan — never a PR |
 | opportunity | a new feature worth adopting | a task/idea with the release-note link and the code it would change |
 
-At most `[upgrade] max_prs` PRs per run; the rest wait for the next run (say so in the report).
+Never `git push` the default branch and never merge — the tools for both are denied; if a step seems to need
+one, stop and say so in the report. At most `[upgrade] max_prs` PRs per run; the rest wait for the next run (say so in the report).
 
 ## 5. Change, verify, prove no deprecations
 
-On this run's branch, per PR group (one branch per PR: `<run branch>-<group>`):
-1. Bump the manifests (keep the repo's pin style) and run `[upgrade] install`.
+Per PR group, on its own branch `$FACTORY_BRANCH-<group>` cut from the default branch:
+1. Bump the manifests at every `locations` entry (keep the repo's pin style). Packages linked by `required_by`
+   move together: bump the parent, let the installer resolve, then re-pin what changed (playbook → Bumping).
+   Run `[upgrade] install`.
 2. Apply every code change the notes require — breaking changes **and** deprecations the new versions announce
    for APIs we call. Prefer the replacement API the notes name.
 3. Run `[verify] commands` (the repo's full local gate). Fix until green; if a package can't be made green in
@@ -57,12 +62,14 @@ On this run's branch, per PR group (one branch per PR: `<run branch>-<group>`):
 
 ## 6. Land
 
-Land each PR through the repo's own procedure (`[land] with`: `skill:<name>` → invoke that skill; otherwise run
+Tasks you filed are files in the repo for some task systems: commit them on `$FACTORY_BRANCH-tasks` and land
+that branch like any other, or they are lost when the run ends. Land each PR through the repo's own procedure (`[land] with`: `skill:<name>` → invoke that skill; otherwise run
 the command). The repo's review gate and CI apply as for any change — never merge, never push the default branch.
 PR body: what moved (from → to), why it is safe (notes read, usage checked, verify + deprecation results),
 code changes, links to every release note read.
 
 ## 7. Report
 
-End with one short digest (plain words, no colour-only signals): PRs opened, tasks filed, packages left for the
-next run, lookups that failed. This is what the principal reads.
+Write one short digest to `$FACTORY_REPORT` (or print it when unset): PRs opened (link, what moved), tasks
+filed, packages left for the next run, deprecations fixed, lookups that failed. Plain words, no colour-only
+signals. This is what the principal reads; the runner delivers it (`[report] with`).
