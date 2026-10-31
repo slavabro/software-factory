@@ -20,7 +20,8 @@ DEFAULT_ALLOWED_TOOLS = [
     "Bash(git status*)", "Bash(git diff*)", "Bash(git log*)", "Bash(git show*)", "Bash(git add *)",
     "Bash(git commit *)", "Bash(git checkout -b factory/*)", "Bash(git switch *)", "Bash(git branch*)",
     "Bash(git fetch*)", "Bash(git merge origin/{default_branch}*)", "Bash(git rev-parse*)", "Bash(git ls-remote*)",
-    "Bash(git grep *)", "Bash(git restore *)", "Bash(git push -u origin factory/*)", "Bash(git push origin factory/*)",
+    "Bash(git grep *)", "Bash(git restore *)", "Bash(git push -u origin factory/*)", "Bash(git push origin factory/*)", "Bash(git push -u origin HEAD*)",
+    "Bash(git merge-base*)",
     "Bash(gh pr create *)", "Bash(gh pr list*)", "Bash(gh pr view*)", "Bash(gh pr checks*)", "Bash(gh pr edit *)",
     "Bash(gh run list*)", "Bash(gh run view*)", "Bash(gh run rerun *)", "Bash(gh issue create *)",
     "Bash(gh issue list*)", "Bash(gh api repos/*/releases*)", "Bash(gh release view *)", "Bash(gh release list *)",
@@ -28,13 +29,14 @@ DEFAULT_ALLOWED_TOOLS = [
     "Bash(npm install *)", "Bash(npm ci*)", "Bash(npm run *)", "Bash(npm view *)", "Bash(npm outdated*)", "Bash(npm ls*)",
     "Bash(make ci*)", "Bash(make lint*)", "Bash(make fmt*)", "Bash(make test*)",
     "Bash(ls *)", "Bash(cat *)", "Bash(head *)", "Bash(tail *)", "Bash(grep *)", "Bash(sed *)", "Bash(jq *)",
-    "Bash(echo *)", "Bash(wc *)", "Bash(sort *)", "Bash(diff *)", "Bash(find *)", "Bash(mktemp*)", "Bash(cd *)",
+    "Bash(echo *)", "Bash(wc *)", "Bash(sort *)", "Bash(diff *)", "Bash(mktemp*)", "Bash(cd *)",
     "Bash(mkdir *)", "Bash(touch *)", "Bash(cp *)", "Bash(mv *)", "Bash(test *)", "Bash(printf *)", "Bash(true)",
 ]
-# Refused even if an allow rule matches (Claude Code applies deny first).
+# Refused even if an allow rule matches (Claude Code applies deny first). Pushes to the default branch are refused by
+# the guard hook (sfactory/guard.py), which matches the refspec itself rather than a substring of the command.
 DEFAULT_DISALLOWED_TOOLS = [
     "Bash(gh pr merge*)", "Bash(gh api *merge*)", "Bash(gh api -X*)", "Bash(gh api --method*)", "Bash(gh repo *)",
-    "Bash(gh secret *)", "Bash(gh release create*)", "Bash(git push*{default_branch}*)", "Bash(git push*--force*)",
+    "Bash(gh secret *)", "Bash(gh release create*)", "Bash(gh api graphql*)", "Bash(git push*--force*)",
     "Bash(git push*-f *)", "Bash(git push*--delete*)", "Bash(git reset --hard*)", "Bash(git stash*)",
     "Bash(rm -rf /*)", "Bash(rm -rf ~*)", "Bash(sudo *)", "Bash(curl *|*sh*)",
 ]

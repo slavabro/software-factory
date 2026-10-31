@@ -154,9 +154,9 @@ class ConfigAndTaskTests(Repo):
         argv = runner.agent_argv(config.load(self.root), "/x")
         denied = argv[argv.index("--disallowedTools") + 1]
         allowed = argv[argv.index("--allowedTools") + 1]
-        for rule in ("Bash(gh pr merge*)", "Bash(git push*main*)", "Bash(git push*--force*)"):
+        for rule in ("Bash(gh pr merge*)", "Bash(gh api graphql*)", "Bash(git push*--force*)"):
             self.assertIn(rule, denied)
-        for blanket in ("Bash(git *)", "Bash(gh *)", "Bash(python3 *)", "Bash(npx *)", "Bash(make *)"):
+        for blanket in ("Bash(git *)", "Bash(gh *)", "Bash(python3 *)", "Bash(npx *)", "Bash(make *)", "Bash(find *)"):
             self.assertNotIn(blanket, allowed.split(","))
 
     def test_task_values_are_shell_quoted(self):
@@ -176,8 +176,23 @@ class GuardTests(unittest.TestCase):
         for cmd in ["gh pr merge 12 --squash", "git push origin main", "git push origin HEAD:main",
                     "make ci && git push -u origin main", "git push --force origin factory/x", "git push origin +factory/x",
                     "gh api -X PUT repos/o/r/pulls/3/merge", "gh api repos/o/r/merges -f base=main", "gh repo delete o/r",
-                    "git push", "git push origin --delete factory/x"]:
+                    "git push", "git push origin --delete factory/x", "git -C . push origin main", "git -c a=b push origin main",
+                    "gh -R o/r pr merge 3", "gh api graphql -f query='mutation { mergePullRequest(input:{}) { clientMutationId } }'",
+                    "find . -name x -exec rm {} ;", "git push -u origin HEAD"]:
             self.assertIsNotNone(guard.check(cmd, "main"), cmd)
+
+    def test_head_push_only_from_a_factory_branch(self):
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["git", "init", "-q", "-b", "main", d], check=True)
+            self.assertIsNotNone(guard.check("git push -u origin HEAD", "main", d))
+            subprocess.run(["git", "checkout", "-q", "-b", "factory/upgrade-1-deps"], cwd=d, check=True)
+            self.assertIsNone(guard.check("git push -u origin HEAD", "main", d))
+
+    def test_fails_closed_inside_a_run(self):
+        import os
+        proc = subprocess.run([sys.executable, "-m", "sfactory.guard"], input="not json", text=True, capture_output=True,
+                              env={**os.environ, "FACTORY_RUN": "x", "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "plugins" / "factory")})
+        self.assertEqual(proc.returncode, 2)
 
     def test_allows_the_normal_flow(self):
         for cmd in ["git push -u origin factory/upgrade-20261031-deps", "gh pr create --base main --title x --body-file f",
