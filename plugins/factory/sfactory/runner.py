@@ -12,7 +12,8 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from .config import Config
+from . import config as config_mod
+from .config import CONFIG_NAME, Config
 
 HOME = Path(os.environ.get("FACTORY_HOME", Path.home() / ".cache" / "software-factory"))
 
@@ -61,27 +62,48 @@ def run(cfg: Config, capability: str, dry_run: bool = False, keep: bool = False)
         return 0
 
     env = {**os.environ, "REPO": str(cfg.root), "WORKTREE": str(worktree), "FACTORY_RUN": f"{capability}-{stamp}"}
+    created = False
     try:
         with open(log_path, "w") as log:
             log.write(f"factory {capability} run {stamp} for {cfg.root}\n")
-            steps = [
-                ["git", "fetch", "--quiet", "origin", cfg.default_branch],
-                ["git", "worktree", "add", "--quiet", "-b", branch, str(worktree), f"origin/{cfg.default_branch}"],
-            ]
-            for step in steps:
-                if _sh(step, cfg.root, env, log):
-                    print(f"factory: {shlex.join(step)} failed — see {log_path}")
-                    return 1
-            for cmd in cfg.worktree_setup:
-                if _sh(cmd, worktree, env, log):
-                    print(f"factory: worktree setup `{cmd}` failed — see {log_path}")
-                    return 1
-            code = _sh(argv, worktree, env, log)
-        pushed = subprocess.run(["git", "ls-remote", "--heads", "origin", branch], cwd=cfg.root, capture_output=True, text=True).stdout.strip()
-        if not pushed and not keep:  # nothing landed: leave no worktree or branch behind
-            subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=cfg.root, capture_output=True)
-            subprocess.run(["git", "branch", "-D", branch], cwd=cfg.root, capture_output=True)
+            code = _prepare_and_run(cfg, capability, worktree, branch, env, log, log_path)
+            created = code != _NOT_CREATED
+            if code == _NOT_CREATED:
+                return 1
+            if code == _NOT_OPTED_IN:
+                return 0
         print(f"factory: {capability} run finished (agent exit {code}) — log {log_path}")
         return code
     finally:
+        if created and not keep:
+            pushed = subprocess.run(
+                ["git", "ls-remote", "--heads", "origin", branch], cwd=cfg.root, capture_output=True, text=True
+            ).stdout.strip()
+            if not pushed:  # nothing landed: leave no worktree or branch behind
+                subprocess.run(["git", "worktree", "remove", "--force", str(worktree)], cwd=cfg.root, capture_output=True)
+                subprocess.run(["git", "branch", "-D", branch], cwd=cfg.root, capture_output=True)
         lock.unlink(missing_ok=True)
+
+
+_NOT_CREATED = -1000
+_NOT_OPTED_IN = -1001
+
+
+def _prepare_and_run(cfg: Config, capability: str, worktree: Path, branch: str, env: dict, log, log_path: Path) -> int:
+    """Fresh worktree off the default branch, its config and setup, then the agent. Returns the agent's exit code."""
+    if _sh(["git", "fetch", "--quiet", "origin", cfg.default_branch], cfg.root, env, log) or _sh(
+        ["git", "worktree", "add", "--quiet", "-b", branch, str(worktree), f"origin/{cfg.default_branch}"], cfg.root, env, log
+    ):
+        print(f"factory: could not create the run worktree — see {log_path}")
+        return _NOT_CREATED
+    # The run follows the default branch's config, not a possibly stale main checkout.
+    if not (worktree / CONFIG_NAME).is_file():
+        log.write(f"no {CONFIG_NAME} on origin/{cfg.default_branch}: repo not opted in\n")
+        print(f"factory: {cfg.name} has no {CONFIG_NAME} on {cfg.default_branch} — not opted in; nothing to do")
+        return _NOT_OPTED_IN
+    wcfg = config_mod.load(worktree)
+    for cmd in wcfg.worktree_setup:
+        if _sh(cmd, worktree, env, log):
+            print(f"factory: worktree setup `{cmd}` failed — see {log_path}")
+            return 1
+    return _sh(agent_argv(wcfg, PROMPTS[capability]), worktree, env, log)

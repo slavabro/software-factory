@@ -152,6 +152,46 @@ class RunnerAndScheduleTests(Repo):
             with self.assertRaises(ValueError):
                 schedule.parse_cron(bad)
 
+    def _origin(self, files: dict[str, str]):
+        """A bare origin with one commit on main holding `files`, and self.root cloned from it."""
+        origin = self.root / "origin.git"
+        seed = self.root / "seed"
+        subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+        subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
+        for rel, text in files.items():
+            write(seed, rel, text)
+        for cmd in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "seed", "--allow-empty"],
+                    ["remote", "add", "origin", str(origin)], ["push", "-q", "origin", "main"]):
+            subprocess.run(["git", *cmd], cwd=seed, check=True)
+        repo = self.root / "repo"
+        subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True)
+        return repo
+
+    def _run(self, repo: Path):
+        home = self.root / "home"
+        old = runner.HOME
+        runner.HOME = home
+        try:
+            code = runner.run(config.load(repo), "upgrade")
+        finally:
+            runner.HOME = old
+        trees = subprocess.run(["git", "worktree", "list"], cwd=repo, capture_output=True, text=True).stdout
+        return code, trees.count("\n"), home
+
+    def test_run_without_opt_in_does_nothing_and_cleans_up(self):
+        repo = self._origin({"README.md": "x\n"})
+        code, trees, _ = self._run(repo)
+        self.assertEqual((code, trees), (0, 1))
+
+    def test_run_uses_origin_config_runs_agent_and_cleans_up(self):
+        cfg = '[worktree]\nsetup = ["touch setup-ran"]\n[agent]\ncommand = ["sh", "-c", "test -f setup-ran && echo agent-ran {prompt}"]\n'
+        repo = self._origin({".factory.toml": cfg})
+        code, trees, home = self._run(repo)
+        self.assertEqual((code, trees), (0, 1))  # nothing pushed -> worktree removed
+        log = next((home / "logs").rglob("upgrade-*.log")).read_text()
+        self.assertIn("agent-ran /factory:upgrade", log)
+        self.assertFalse(list((home / "runs").rglob("*.lock")))
+
     def test_dry_run_changes_nothing(self):
         cfg = config.load(self.root)
         self.assertEqual(runner.run(cfg, "upgrade", dry_run=True), 0)
