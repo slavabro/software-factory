@@ -1,0 +1,20 @@
+[project]
+name = "skillcheck"
+dynamic = ["version"]
+description = "Lint Claude Code skills, commands, subagents and CLAUDE.md files"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+skillcheck = "skillcheck.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = { "" = "plugins/factory" }
+packages = ["skillcheck"]
+
+[tool.setuptools.dynamic]
+version = { attr = "skillcheck.__version__" }

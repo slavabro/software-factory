@@ -1,0 +1,13 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "software-factory",
+  "owner": { "name": "slavabro" },
+  "description": "slavabro's agent tooling: skill linting, review workflows, fleet control.",
+  "plugins": [
+    {
+      "name": "factory",
+      "source": "./plugins/factory",
+      "description": "skillcheck + SessionStart drift check + skills-review workflow"
+    }
+  ]
+}

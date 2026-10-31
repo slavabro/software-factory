@@ -1,0 +1,17 @@
+#!/bin/sh
+# Start the Orca control tower: a Claude session running the /fleet skill.
+# Run it inside an Orca terminal; it watches every other Orca terminal.
+# The tower only reads, summarises and relays, so it runs on Sonnet; override with TOWER_MODEL=opus tower
+command -v orca >/dev/null 2>&1 || PATH="/Applications/Orca.app/Contents/Resources/bin:$PATH"
+orca status --json >/dev/null 2>&1 || { echo "tower: Orca runtime not reachable (open Orca first)" >&2; exit 1; }
+# Keep the tab titled "Tower": Claude Code would otherwise retitle it after the conversation topic.
+export CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1
+[ -n "$ORCA_TERMINAL_HANDLE" ] && orca terminal rename --terminal "$ORCA_TERMINAL_HANDLE" --title "Tower" --json >/dev/null 2>&1
+# Telegram: the plugin is disabled globally (every session would otherwise start a poller and steal the bot token
+# from the tower) and enabled here only. TOWER_TELEGRAM=0 starts the tower without it.
+if [ "${TOWER_TELEGRAM:-1}" = 1 ]; then
+  TG='{"enabledPlugins":{"telegram@claude-plugins-official":true},"permissions":{"allow":["mcp__plugin_telegram_telegram__reply","mcp__plugin_telegram_telegram__react","mcp__plugin_telegram_telegram__edit_message"]}}'
+  # The prompt goes before --channels: that flag is variadic and would swallow it.
+  exec claude --model "${TOWER_MODEL:-sonnet}" --settings "$TG" "/fleet ${*:-status}" --channels plugin:telegram@claude-plugins-official
+fi
+exec claude --model "${TOWER_MODEL:-sonnet}" "/fleet ${*:-status}"

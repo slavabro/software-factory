@@ -1,0 +1,19 @@
+name: skillcheck
+description: Lint Claude Code skills, commands, subagents and CLAUDE.md files (software-factory)
+inputs:
+  path:
+    description: Repo root to check
+    default: "."
+  args:
+    description: Extra skillcheck arguments (e.g. --strict)
+    default: "--strict"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+    - shell: bash
+      env:
+        PYTHONPATH: ${{ github.action_path }}/plugins/factory
+      run: python3 -m skillcheck "${{ inputs.path }}" --format github ${{ inputs.args }}

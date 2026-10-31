@@ -1,0 +1,9 @@
+{
+  "$schema": "https://anthropic.com/claude-code/plugin.schema.json",
+  "name": "factory",
+  "version": "0.1.0",
+  "description": "Software factory: skillcheck (lint skills, commands, subagents and CLAUDE.md files), a SessionStart drift check, and the skills-review workflow.",
+  "author": { "name": "slavabro" },
+  "repository": "https://github.com/slavabro/software-factory",
+  "license": "UNLICENSED"
+}

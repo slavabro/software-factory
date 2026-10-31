@@ -1,0 +1,5 @@
+#!/bin/sh
+# skillcheck from this software-factory clone (no pip install needed; Python 3.11+).
+SELF=$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$0")
+ROOT=$(cd "$(dirname "$SELF")/../.." && pwd)
+PYTHONPATH="$ROOT/plugins/factory${PYTHONPATH:+:$PYTHONPATH}" exec python3 -m skillcheck "$@"

@@ -1,0 +1,8 @@
+# The factory's own skills are generic: the paths they name live in the repo they run on, not here.
+[paths]
+ignore = ["plugins/*/skills/**", "home/skills/**"]
+
+[[banned]]
+pattern = '(?i)\bco-authored-by:|generated with \[claude'
+message = "no AI attribution lines (see CLAUDE.md)"
+paths = ["**/*.md"]
