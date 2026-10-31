@@ -84,7 +84,7 @@ class Finding:
 class Doc:
     path: Path
     rel: str
-    kind: str  # skill | command | agent | reference | claude_md
+    kind: str  # skill | command | agent | reference | claude_md | doc ([scan] include)
     text: str
     fm: frontmatter.Frontmatter | None = None
     owner: Path | None = None  # skill directory, for skills and references
@@ -118,6 +118,8 @@ def discover(cfg: Config) -> list[Doc]:
                 kind, owner = "skill", here
             elif name == "CLAUDE.md":
                 kind = "claude_md"
+            elif any(_match(rel, p) for p in cfg.scan_include):
+                kind = "doc"
             elif parent == "commands" and (grand.name == ".claude" or _is_plugin_dir(grand)):
                 kind = "command"
             elif parent == "agents" and (grand.name == ".claude" or _is_plugin_dir(grand)):

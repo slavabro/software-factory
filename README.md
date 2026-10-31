@@ -38,7 +38,7 @@ without a clone: `claude plugin marketplace add slavabro/software-factory` then
   - uses: slavabro/software-factory@main
   ```
 
-- Config: `.skillcheck.toml` at the repo root — `[budgets]`, `[paths] allow/ignore`, `[[banned]]` patterns with the
+- Config: `.skillcheck.toml` at the repo root — `[budgets]`, `[paths] allow/ignore`, `[scan] include` (extra docs such as a testing guide), `[[banned]]` patterns with the
   true replacement, `[severity]` overrides, `fail_on`. `skillcheck --rules` lists rule IDs.
 
 ## Develop

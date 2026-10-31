@@ -42,6 +42,7 @@ class Config:
         default_factory=lambda: [".git", "node_modules", ".venv", "venv", "__pycache__", "synced", ".next", "dist", "build"]
     )
     exclude: list[str] = field(default_factory=list)
+    scan_include: list[str] = field(default_factory=list)  # extra docs to check (links, paths, banned), e.g. a testing guide
     banned: list[Banned] = field(default_factory=list)
     severity: dict[str, str] = field(default_factory=dict)  # rule -> error | warning | off
     fail_on: str = "error"  # error | warning
@@ -62,6 +63,7 @@ def load(root: Path, explicit: Path | None = None) -> Config:
     cfg.path_ignore = list(paths.get("ignore", cfg.path_ignore))
     cfg.path_allow = list(paths.get("allow", cfg.path_allow))
     cfg.exclude = list(raw.get("exclude", cfg.exclude))
+    cfg.scan_include = list(raw.get("scan", {}).get("include", cfg.scan_include))
     cfg.skip_dirs = cfg.skip_dirs + list(raw.get("skip_dirs", []))
     cfg.banned = [Banned(**b) for b in raw.get("banned", [])]
     cfg.severity = {k.upper(): str(v) for k, v in raw.get("severity", {}).items()}

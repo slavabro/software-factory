@@ -133,6 +133,12 @@ class RuleTests(unittest.TestCase):
         write(self.root, ".claude/agents/r.md", "---\ntools: Read\n---\nYou review.\n")
         self.assertIn("SC022", rules(self.root))
 
+    def test_scan_include_checks_extra_docs(self):
+        write(self.root, ".skillcheck.toml", '[scan]\ninclude = ["tests/GUIDE.md"]\n[paths]\ninclude = ["tests/GUIDE.md"]\n[[banned]]\npattern = "python -m pytest"\nmessage = "use the tier script"\n')
+        write(self.root, "tests/GUIDE.md", "Run `python -m pytest` or read `docs/gone.md`.\n")
+        found = rules(self.root)
+        self.assertTrue({"SC015", "SC021"} <= found, found)
+
     def test_severity_override(self):
         write(self.root, ".skillcheck.toml", '[severity]\nSC017 = "off"\n')
         write(self.root, ".claude/commands/go.md", "---\ndescription: Use when going.\n---\n")
