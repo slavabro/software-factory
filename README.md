@@ -34,8 +34,8 @@ without a clone: `claude plugin marketplace add slavabro/software-factory` then
 - CI, as a PR check (the repo must be allowed to use this private repo's actions — already set for slavabro's repos):
 
   ```yaml
-  - uses: actions/checkout@v4
-  - uses: slavabro/software-factory@main
+  - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+  - uses: slavabro/software-factory@<commit sha>  # pin it; Dependabot (github-actions) bumps it
   ```
 
 - Config: `.skillcheck.toml` at the repo root — `[budgets]`, `[paths] allow/ignore`, `[scan] include` (extra docs such as a testing guide), `[[banned]]` patterns with the
