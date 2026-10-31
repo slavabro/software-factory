@@ -17,7 +17,7 @@ laptops. It stays in a project when it encodes that project's domain or its live
 | Thing | Where | Why |
 |-------|-------|-----|
 | Domain reviewer skills (architecture, DAL, Temporal, LLM, wealth, frontend, Tufte, testing) | FamilyOffice `.claude/skills/` | They encode FamilyOffice's rules; they point at its CLAUDE.md files |
-| Task workflow skills (`/design-task` … `/complete-feature`, `/land`, `/review-code`) | FamilyOffice | Bound to `scripts/tasks.py`, its CI jobs and review gate. Generic shape is a candidate below |
+| Task workflow skills (`/design-task` … `/complete-feature`, `/land`, `/review-code`) | FamilyOffice | Bound to `scripts/tasks.py`, its CI jobs and review gate. Generic shape is backlog F-11 |
 | `.claude/fleet-brief.md` | FamilyOffice main checkout (untracked) | Per-repo technical notes the tower appends to briefs |
 | Orca `orca-cli` / `orchestration` skills | `~/.agents/skills/` | Vendor stubs that load guides from the Orca binary; versioned with Orca |
 | Anthropic synced skills | `~/.claude/skills/synced/` | Managed by claude.ai sync |
