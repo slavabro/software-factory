@@ -1,5 +1,7 @@
 # software-factory
 
+**Ideas in, shipped code out**: the system that produces slavabro's code — [docs/VISION.md](docs/VISION.md), work in [docs/BACKLOG.md](docs/BACKLOG.md).
+
 The reusable half of how slavabro's agents work: the tools, skills and checks that are the same in every repo and on
 every laptop. Each project keeps only what is specific to it (its domain reviewer skills, its task workflow, its
 `.skillcheck.toml`).
@@ -13,7 +15,7 @@ every laptop. Each project keeps only what is specific to it (its domain reviewe
 | `plugins/factory/skills/skills-review/` | `/factory:skills-review` — the judgement half: verify every skill against the code, verdict report, apply approved fixes | part of the `factory` plugin |
 | `home/skills/fleet/` | `/fleet` — Orca control tower: one session watches, relays and lands for every agent | `~/.claude/skills/fleet` |
 | `home/bin/tower` | starts the tower session (Sonnet, Telegram channel) | `~/.local/bin/tower` |
-| `docs/INVENTORY.md` | what moved here, what stays per project, what to build next | — |
+| `docs/INVENTORY.md` | what moved here and what stays per project | — |
 
 Rule catalog with sources: [plugins/factory/skills/skills-review/references/rules.md](plugins/factory/skills/skills-review/references/rules.md).
 

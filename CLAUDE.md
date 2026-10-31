@@ -1,6 +1,7 @@
 # CLAUDE.md
 
-The software factory: reusable agent tooling for every repo and laptop (see README.md). Projects consume it; nothing
+The software factory: the system that turns the principal's ideas into shipped code, in every repo and on every
+laptop. Direction: docs/VISION.md; work: docs/BACKLOG.md. Projects consume it; nothing
 here may name a project's domain, paths or people.
 
 ## Rules
