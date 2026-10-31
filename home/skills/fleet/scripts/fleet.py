@@ -454,13 +454,15 @@ def gate(number: int, repo: str) -> dict:
     if ci_state == "running":
         return {**out, "verdict": "WAIT", "reasons": [ci_words]}
     if not gate_ok:
-        if checks:
-            return {**out, "verdict": "WAIT", "reasons": [f"no green '{GATE_CHECK}' check yet ({ci_words})"]}
+        # A docs-only PR skips the CI OK workflow but may carry other checks (e.g. Skills); those all passed above.
         if not docs_only:
+            if checks:
+                return {**out, "verdict": "WAIT", "reasons": [f"no green '{GATE_CHECK}' check yet ({ci_words})"]}
             return {**out, "verdict": "WAIT", "reasons": ["no CI checks on a code PR yet"]}
-        age_min = (time.time() - calendar.timegm(time.strptime(pr["updatedAt"], "%Y-%m-%dT%H:%M:%SZ"))) / 60
-        if age_min < DOCS_SETTLE_MINUTES:
-            return {**out, "verdict": "WAIT", "reasons": ["docs-only PR, giving CI a moment to appear"]}
+        if not checks:
+            age_min = (time.time() - calendar.timegm(time.strptime(pr["updatedAt"], "%Y-%m-%dT%H:%M:%SZ"))) / 60
+            if age_min < DOCS_SETTLE_MINUTES:
+                return {**out, "verdict": "WAIT", "reasons": ["docs-only PR, giving CI a moment to appear"]}
     if not docs_only and "## Review gate" not in (pr.get("body") or ""):
         return {**out, "verdict": "FIX", "reasons": ["PR body has no '## Review gate' block"],
                 "fix": "Run /review-code --gate, fix or rebut findings >= 75, and put its '## Review gate' block "
