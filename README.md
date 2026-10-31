@@ -13,6 +13,8 @@ every laptop. Each project keeps only what is specific to it (its domain reviewe
 | `plugins/factory/skillcheck/` | **skillcheck** — lints skills, legacy commands, subagents and CLAUDE.md files: frontmatter and description rules, size and progressive-disclosure budgets, dead paths and links, copies that will drift, repo-specific banned patterns. Python 3.11+, no dependencies | `skillcheck` on PATH; GitHub Action (`action.yml`); `pip install` (`pyproject.toml`) |
 | `plugins/factory/hooks/` | SessionStart hook — runs skillcheck on the session's repo and `~/.claude/skills`; silent unless there are errors | part of the `factory` plugin |
 | `plugins/factory/skills/skills-review/` | `/factory:skills-review` — the judgement half: verify every skill against the code, verdict report, apply approved fixes | part of the `factory` plugin |
+| `plugins/factory/sfactory/` + `home/bin/factory` | **factory** CLI — reads a repo's `.factory.toml` ([reference](docs/factory-toml.md)); `factory upgrade scan`, `factory upgrade deprecations`, `factory run <capability>` (unattended, fresh worktree, any agent CLI), `factory schedule install` (launchd / systemd / cron) | `factory` on PATH |
+| `plugins/factory/skills/upgrade/` | `/factory:upgrade` — dependency upgrades end to end: release notes, code changes, verify, no deprecations, grouped PRs through the repo's gate | part of the `factory` plugin |
 | `home/skills/fleet/` | `/fleet` — Orca control tower: one session watches, relays and lands for every agent | `~/.claude/skills/fleet` |
 | `home/bin/tower` | starts the tower session (Sonnet, Telegram channel) | `~/.local/bin/tower` |
 | `docs/INVENTORY.md` | what moved here and what stays per project | — |

@@ -8,7 +8,7 @@ the Status column. Each task becomes a spec under `docs/tasks/` when work starts
 
 | ID | Task | Why | Status |
 |----|------|-----|--------|
-| F-01 | **Dependency scout agent** — see spec below | Upgrades, security fixes and new capabilities are found by reading release notes, not by luck | open — spec ready, decisions below |
+| F-01 | **Upgrade capability** (dependency scout) — see spec below | Upgrades, security fixes and new capabilities are found by reading release notes, not by luck | v0.1 built: `factory upgrade …`, `/factory:upgrade`, `factory run/schedule`; first scheduled run on FamilyOffice next |
 | F-02 | **Factory PR ownership** — who reviews and merges factory PRs (the tower with the same gate, or the principal) and whether Dependabot can bump the private action pin in consumer repos | Factory changes need the same landing discipline as product code | open — separate worktree, principal's call |
 | F-03 | **Task system as a factory product** — package FamilyOffice's `scripts/tasks.py` (front matter as the record, generated tables, IDs unique across worktrees, CI checks) for any repo, and use it here | Every stage of the pipeline reads and writes tasks | open |
 
@@ -35,7 +35,7 @@ the Status column. Each task becomes a spec under `docs/tasks/` when work starts
 
 ---
 
-## F-01 spec — Dependency scout agent
+## F-01 spec — Upgrade capability (dependency scout)
 
 **Goal.** On a schedule, for each repo the factory serves: find every dependency that can move forward, read what
 changed between our version and the latest, and turn it into work — safe upgrades as PRs, risky ones as tasks,
@@ -73,13 +73,14 @@ new capabilities as ideas — so the principal only sees results and decisions.
 - One upgrade PR per risk group per run, not one per package; skips packages with an open PR or task already.
 - Read-only on registries and release notes; no tokens or private data leave the machine.
 
-**Decisions for the principal before building.**
-1. **Where it runs:** a scheduled cloud routine (`/schedule`, runs without the laptop) vs a local job that spawns an
-   agent through the tower (sees Orca, uses the laptop's auth).
-2. **Cadence:** weekly digest + immediate run on a security advisory, or monthly.
-3. **Autonomy at start:** report-only for the first runs, then safe PRs, then (earned) auto-merge of patch-level
-   bumps through the gate — or safe PRs from day one.
-4. **Scope:** FamilyOffice only first, or every repo in `~/Dev` that has a factory config.
+**Decided (2026-10-31, by the principal).**
+1. **Generic**: a factory capability for every repo that has a `.factory.toml`, with generic skills — nothing
+   repo-specific in the factory ([factory-toml.md](factory-toml.md)).
+2. **Upgrades from day one** and runs the whole flow: notes → code changes → verify → no deprecations → land.
+3. **Proves the code still works**: the repo's `[verify]` gate, plus `[upgrade] deprecation_check` piped through
+   `factory upgrade deprecations` until no warning comes from our code.
+4. **Configurable schedule** (`[upgrade] schedule`, cron); runs locally (`factory schedule install upgrade` → launchd
+   / systemd / cron), and moves to another machine or runner by changing config, not code (`[agent] command`).
 
 **Done when:** a run on FamilyOffice produces a digest, at least one grouped upgrade PR that passes CI, tasks for the
 risky items and inbox ideas for the opportunities — with every claim linked to a release note.

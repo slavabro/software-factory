@@ -9,6 +9,7 @@ laptops. It stays in a project when it encodes that project's domain or its live
 |-------|-----|-----|
 | Skill linter | — (new) | `plugins/factory/skillcheck/` + SessionStart hook + `action.yml` |
 | Skills review workflow | one-off session in FamilyOffice | `/factory:skills-review` |
+| Dependency upgrades | by hand, occasionally | `/factory:upgrade` + `factory run/schedule upgrade` (F-01) |
 | Fleet tower skill + `fleet.py` | `~/.claude/skills/fleet/` (untracked, backup in `~/.claude/backups/`) | `home/skills/fleet/`, symlinked back; Telegram rules split into a reference that loads only when Telegram is on |
 | `tower` launcher | `~/.local/bin/tower` (untracked) | `home/bin/tower`, symlinked back |
 
