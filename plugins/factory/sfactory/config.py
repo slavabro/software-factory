@@ -7,6 +7,7 @@ safety setting). Reference with every key: docs/factory-toml.md.
 
 from __future__ import annotations
 
+import subprocess
 import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -112,12 +113,22 @@ def _check(raw: dict, path: Path) -> None:
 
 
 def load(root: Path) -> Config:
+    path = root.resolve() / CONFIG_NAME
+    return parse(root, path.read_text() if path.is_file() else None, path)
+
+
+def load_ref(root: Path, ref: str) -> Config:
+    """The config as committed at `ref` (e.g. origin/main) — what a run will use, whatever the checkout holds."""
+    shown = subprocess.run(["git", "show", f"{ref}:{CONFIG_NAME}"], cwd=root, capture_output=True, text=True)
+    return parse(root, shown.stdout if shown.returncode == 0 else None, Path(f"{ref}:{CONFIG_NAME}"))
+
+
+def parse(root: Path, text: str | None, path: Path) -> Config:
     root = root.resolve()
     cfg = Config(root=root, name=root.name)
-    path = root / CONFIG_NAME
-    if not path.is_file():
+    if text is None:
         return cfg
-    raw = tomllib.loads(path.read_text())
+    raw = tomllib.loads(text)
     _check(raw, path)
     repo = raw.get("repo", {})
     cfg.name = str(repo.get("name", cfg.name))

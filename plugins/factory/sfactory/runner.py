@@ -154,9 +154,14 @@ def run(cfg: Config, capability: str, dry_run: bool = False, keep: bool = False)
     branch = f"factory/{capability}-{stamp}"
 
     if dry_run:
-        print(f"repo      {cfg.root}\nworktree  {worktree}\nbranch    {branch} (from origin/{cfg.default_branch})")
-        print("setup     " + (" && ".join(cfg.worktree_setup) or "—"))
-        print(f"agent     {shlex.join(agent_argv(cfg, PROMPTS[capability]))}\ntimeout   {cfg.agent_timeout_minutes} min")
+        # Show what the run will use: the config on origin/<default_branch> (as last fetched), not the checkout's.
+        ref = f"origin/{cfg.default_branch}"
+        rcfg = config_mod.load_ref(cfg.root, ref)
+        opted_in = subprocess.run(["git", "cat-file", "-e", f"{ref}:{CONFIG_NAME}"], cwd=cfg.root, capture_output=True).returncode == 0
+        print(f"repo      {cfg.root}\nworktree  {worktree}\nbranch    {branch} (from {ref})")
+        print(f"config    {ref}:{CONFIG_NAME}" + ("" if opted_in else " — missing: not opted in, a run does nothing"))
+        print("setup     " + (" && ".join(rcfg.worktree_setup) or "—"))
+        print(f"agent     {shlex.join(agent_argv(rcfg, PROMPTS[capability]))}\ntimeout   {rcfg.agent_timeout_minutes} min")
         print(f"log       {log_path}\nreport    {report}")
         return 0
     runs.mkdir(parents=True, exist_ok=True)

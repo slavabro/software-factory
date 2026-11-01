@@ -1,6 +1,8 @@
 """The factory engine: config, versions, manifests, scan (fake registries), deprecations, runner, schedules.
 Run: python3 -m unittest discover -s tests"""
 
+import contextlib
+import io
 import plistlib
 import subprocess
 import sys
@@ -282,6 +284,15 @@ class RunnerAndScheduleTests(Repo):
     def test_timeout_kills_the_agent(self):
         log = (self.root / "t.log").open("w")
         self.assertEqual(runner._sh(["sleep", "30"], self.root, {"PATH": "/usr/bin:/bin"}, log, timeout=0.5), runner._TIMED_OUT)
+
+    def test_dry_run_shows_the_default_branch_config_not_the_checkout(self):
+        repo = self._origin({".factory.toml": '[worktree]\nsetup = ["echo from-main"]\n'})
+        (repo / ".factory.toml").unlink()  # the checkout lags; the run (and its preview) follow origin
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(runner.run(config.load(repo), "upgrade", dry_run=True), 0)
+        self.assertIn("setup     echo from-main", out.getvalue())
+        self.assertNotIn("not opted in", out.getvalue())
 
     def test_dry_run_changes_nothing(self):
         cfg = config.load(self.root)
