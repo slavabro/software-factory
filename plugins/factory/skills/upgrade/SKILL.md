@@ -8,7 +8,7 @@ argument-hint: "[package ...] [--report-only]"
 
 You own this repo's dependencies for one run. Everything repo-specific comes from its `.factory.toml` — read it
 first with `factory config`; never assume conventions from another repo that this config doesn't state. An
-unattended run sets `$FACTORY_BRANCH` (your branch prefix) and `$FACTORY_REPORT` (where the digest goes).
+unattended run sets `$FACTORY_BRANCH` (your branch prefix) and `$FACTORY_REPORT` (where the digest goes: `.factory/report.md`, relative to the worktree root and git-ignored).
 Arguments: `$ARGUMENTS` (packages to limit to; `--report-only` = steps 1–3 and the report, no changes).
 
 The full playbook with commands per ecosystem: [references/playbook.md](references/playbook.md).
@@ -25,6 +25,10 @@ For each candidate read the release notes from `current` (exclusive) to `latest`
 GitHub releases (`gh api repos/<o>/<r>/releases --paginate`), the CHANGELOG. Record per package: security fixes
 (advisory IDs), breaking changes, deprecations (old → new API), new features. Never upgrade on a version number
 alone.
+
+Advisories in one call per ecosystem, not package by package: `npm audit --json` (in each package.json dir) and
+`gh api '/advisories?ecosystem=pip&affects=<name>@<current>,<name>@<current>,…&per_page=100'` (batch the pins;
+`ecosystem=npm` works the same). Both are read-only.
 
 ## 3. Map to our code
 
@@ -70,6 +74,6 @@ code changes, links to every release note read.
 
 ## 7. Report
 
-Write one short digest to `$FACTORY_REPORT` (or print it when unset): PRs opened (link, what moved), tasks
+Write one short digest to `.factory/report.md` at the worktree root (the `$FACTORY_REPORT` path; never `git add` it) and end your run by printing it — the runner falls back to your last message: PRs opened (link, what moved), tasks
 filed, packages left for the next run, deprecations fixed, lookups that failed. Plain words, no colour-only
 signals. This is what the principal reads; the runner delivers it (`[report] with`).

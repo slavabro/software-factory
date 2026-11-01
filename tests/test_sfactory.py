@@ -263,9 +263,19 @@ class RunnerAndScheduleTests(Repo):
         repo = self._origin({".factory.toml": cfg, ".gitignore": "setup-ran\n"})
         code, trees, home = self._run(repo)
         self.assertEqual((code, trees), (0, 1))  # nothing pushed -> worktree removed
-        log = next((home / "logs").rglob("upgrade-*.log")).read_text()
-        self.assertIn("agent-ran /factory:upgrade", log)
+        said = next((home / "logs").rglob("upgrade-*.agent.md")).read_text()
+        self.assertIn("agent-ran /factory:upgrade", said)
+        self.assertEqual(next((home / "logs").rglob("upgrade-*.report.md")).read_text(), said)  # last message = digest
         self.assertFalse(list((home / "runs").rglob("*.lock")))
+
+    def test_the_report_file_in_the_worktree_is_collected_and_never_tracked(self):
+        cfg = ('[agent]\ncommand = ["sh", "-c", "echo digest > $FACTORY_REPORT && test -z \\"$(git status --porcelain)\\" '
+               '&& echo clean"]\n')
+        repo = self._origin({".factory.toml": cfg})
+        code, _, home = self._run(repo)
+        self.assertEqual(code, 0)
+        self.assertIn("clean", next((home / "logs").rglob("upgrade-*.agent.md")).read_text())
+        self.assertEqual(next((home / "logs").rglob("upgrade-*.report.md")).read_text(), "digest\n")
 
     def test_unpushed_work_is_kept_not_deleted(self):
         cfg = ('[agent]\ncommand = ["sh", "-c", "git checkout -q -b $FACTORY_BRANCH-deps && echo x > f && git add f && '

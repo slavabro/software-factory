@@ -28,6 +28,10 @@ PROMPTS = {
     "upgrade": "/factory:upgrade",
 }
 
+# The agent writes its digest inside its own worktree (a path outside it is not writable in an unattended run);
+# git ignores it there, and the runner copies it out before cleanup.
+REPORT_REL = ".factory/report.md"
+
 _NOT_CREATED = -1000
 _NOT_OPTED_IN = -1001
 _TIMED_OUT = 124
@@ -173,7 +177,7 @@ def run(cfg: Config, capability: str, dry_run: bool = False, keep: bool = False)
 
     env = {k: v for k, v in os.environ.items() if k not in SCRUB}
     env.update(REPO=str(cfg.root), WORKTREE=str(worktree), FACTORY_RUN=f"{capability}-{stamp}",
-               FACTORY_BRANCH=branch, FACTORY_REPORT=str(report), FACTORY_DEFAULT_BRANCH=cfg.default_branch)
+               FACTORY_BRANCH=branch, FACTORY_REPORT=REPORT_REL, FACTORY_DEFAULT_BRANCH=cfg.default_branch)
     created = False
     try:
         prune(cfg, runs)
@@ -187,6 +191,7 @@ def run(cfg: Config, capability: str, dry_run: bool = False, keep: bool = False)
             return 0
         if code == _TIMED_OUT:
             print(f"factory: {capability} run timed out — log {log_path}")
+        _collect_report(worktree, log_path, report)
         _deliver(cfg, report, worktree, env, log_path)
         print(f"factory: {capability} run finished (agent exit {code}) — log {log_path}")
         return code
@@ -196,6 +201,29 @@ def run(cfg: Config, capability: str, dry_run: bool = False, keep: bool = False)
                 print("factory: " + cleanup(cfg, worktree, branch, log))
         lock.unlink(missing_ok=True)
         signal.signal(signal.SIGTERM, previous)
+
+
+def agent_output_path(log_path: Path) -> Path:
+    return log_path.with_suffix(".agent.md")
+
+
+def _collect_report(worktree: Path, log_path: Path, report: Path) -> None:
+    """The agent's digest file, else its final output (`claude -p` prints only its last message)."""
+    written, said = worktree / REPORT_REL, agent_output_path(log_path)
+    if written.is_file() and written.read_text().strip():
+        shutil.copyfile(written, report)
+    elif said.is_file() and said.read_text().strip():
+        shutil.copyfile(said, report)
+
+
+def _ignore_report_dir(worktree: Path) -> None:
+    exclude = Path(_git(["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], worktree).strip())
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    line = "/" + REPORT_REL.split("/")[0] + "/"
+    if line not in (exclude.read_text().splitlines() if exclude.is_file() else []):
+        with open(exclude, "a") as f:
+            f.write(f"\n{line}\n")
+    (worktree / REPORT_REL).parent.mkdir(parents=True, exist_ok=True)
 
 
 def _deliver(cfg: Config, report: Path, worktree: Path, env: dict, log_path: Path) -> None:
@@ -227,6 +255,7 @@ def _prepare_and_run(cfg: Config, capability: str, worktree: Path, branch: str, 
         log.write(f"invalid config: {exc}\n")
         print(f"factory: {exc}")
         return 1
+    _ignore_report_dir(worktree)
     for cmd in wcfg.worktree_setup:
         if _sh(cmd, worktree, env, log, timeout=1800):
             print(f"factory: worktree setup `{cmd}` failed — see {log_path}")
@@ -238,4 +267,7 @@ def _prepare_and_run(cfg: Config, capability: str, worktree: Path, branch: str, 
     if not shutil.which(argv[0], path=run_env.get("PATH")):
         print(f"factory: agent command {argv[0]!r} not found on PATH — see {log_path}")
         return 1
-    return _sh(argv, worktree, run_env, log, timeout=wcfg.agent_timeout_minutes * 60)
+    log.write(f"\n$ {shlex.join(argv)}  (output → {agent_output_path(log_path)})\n")
+    log.flush()
+    with open(agent_output_path(log_path), "w") as out:
+        return _sh(argv, worktree, run_env, out, timeout=wcfg.agent_timeout_minutes * 60)
