@@ -4,34 +4,72 @@ Direction: [VISION.md](VISION.md). Inventory of what exists and where: [INVENTOR
 Until the factory has its own task system (F-03), this file is the record: one row per task, newest decisions in
 the Status column. Each task becomes a spec under `docs/tasks/` when work starts.
 
-## Now
+The factory is the company, each repo a product it makes (VISION → "What the factory provides"). Phases run in
+order; tasks inside a phase can run in parallel. "From FamilyOffice" means the working version exists there and
+moves here as a generic piece, leaving the project-specific part behind.
+
+## Decisions waiting on the principal
+
+| ID | Decision | Recommendation |
+|----|----------|----------------|
+| D-1 | **Portability rule scope.** CLAUDE.md rule 1 (standard library only) — does it cover only the factory's tools and hooks, or also the shared runtime (F-42), which needs Temporal, LiteLLM and Pydantic? | Tools and hooks stay standard-library; the shared runtime is a separate package with its own dependencies |
+| D-2 | **Where the shared runtime lives** — this repo or its own repo | Its own repo, released as a versioned package; this repo keeps the tools, skills and processes |
+| D-3 | **Who merges factory PRs** (F-02) | The tower with the same gate; ASK for changes to hooks, guards and the gate itself |
+| D-4 | **Release model for the factory** (F-05) | A separate install copy that follows `main`, so a change is live only after it merges |
+
+## Phase 0 — the factory runs on itself
 
 | ID | Task | Why | Status |
 |----|------|-----|--------|
 | F-01 | **Upgrade capability** (dependency scout) — see spec below | Upgrades, security fixes and new capabilities are found by reading release notes, not by luck | v0.1 built: `factory upgrade …`, `/factory:upgrade`, `factory run/schedule`; first scheduled run on FamilyOffice next |
-| F-02 | **Factory PR ownership** — who reviews and merges factory PRs (the tower with the same gate, or the principal) and whether Dependabot can bump the private action pin in consumer repos | Factory changes need the same landing discipline as product code | open — separate worktree, principal's call |
-| F-03 | **Task system as a factory product** — package FamilyOffice's `scripts/tasks.py` (front matter as the record, generated tables, IDs unique across worktrees, CI checks) for any repo, and use it here | Every stage of the pipeline reads and writes tasks | open |
+| F-02 | **Factory PR ownership** — who reviews and merges factory PRs and whether Dependabot can bump the private action pin in consumer repos | Factory changes need the same landing discipline as product code | open — D-3 |
+| F-03 | **Task system as a factory product** — package FamilyOffice's `scripts/tasks.py` (front matter as the record, generated tables, IDs unique across worktrees, CI checks) for any repo; this backlog is its first user | Every stage of the pipeline reads and writes tasks | open |
+| F-04 | **Dogfood** — this repo gets its own `.factory.toml`, a scheduled upgrade run, its tasks in F-03's system, and every change through the gate the factory gives products | The factory is held to its own standard; what hurts here gets fixed for every product | open |
+| F-05 | **Release channel** — the laptop runs an install copy that follows `main` (`factory self-update`); development happens in a separate clone and worktrees | Today `install.sh` links the working checkout, so unmerged edits are live in every session | open — D-4 |
 
-## Next — the pipeline
+## Phase 1 — move what is already generic
 
 | ID | Task | Why |
 |----|------|-----|
-| F-10 | **Intake + shaping skill** — idea in plain words → repo task → shaping questions → split into small vertical tasks with dependencies | The principal's only required input becomes the idea |
-| F-11 | **Generic design → build → review → land pipeline** — today's FamilyOffice workflow skills with repo specifics moved into a repo config (`factory.toml`: test tiers, gate rules, task system, domain reviewers) | Reuse in every repo; one place to improve |
-| F-12 | **Orchestrator** — runs a shaped task graph through the pipeline with agents in worktrees (Orca), parallel where deps allow; feeds the tower's decision queue | Removes the principal from step-driving |
-| F-13 | **Decision queue** — one list of what needs the principal, with options and a recommendation, on terminal and phone (extends the tower's needs-you queue) | Decisions out, nothing else |
-| F-14 | **Skill trigger evals** — `claude plugin eval` cases for every factory and repo skill: fires when it should, stays quiet otherwise | Skills are the factory's machinery; test them like code |
-| F-15 | **Hook pack** — PreToolUse guards that block instead of advise: push to `main`, raw `pytest` where a tier script exists, `git stash` in shared worktrees, edits to generated tables | Rules are code |
+| F-11 | **Engineering pipeline** — FamilyOffice's `/design-task` → `/review-design` → `/compact-design` → `/implement-feature` → `/sync-docs` → `/complete-feature` → `/land`, plus `/review-code`, `/bug-report`, `/debug-fix`, `/challenge`, `git-workflow`; project specifics (test tiers, gate rules, domain reviewers) move into `.factory.toml` | Reuse in every repo; one place to improve |
+| F-30 | **Practice guides** — split each FamilyOffice reviewer into a generic factory skill and the project's notes: data access (schema, migrations, sessions, idempotent writes), Temporal workflows, LLM integration, frontend, testing patterns, data presentation (Tufte) | Good practice is the same in every product; only the domain facts differ |
+| F-31 | **Model and cost policy** — model per stage in `.factory.toml` (Opus for shaping and design, Sonnet for building and review, Haiku for triage and log reading); tokens and cost logged for every run and stage; a weekly cost report, including what each skill costs every session (absorbs the old F-22) | Choose models by evidence; keep spend visible |
+
+## Phase 2 — the departments
+
+| ID | Task | Why |
+|----|------|-----|
+| F-10 | **Product** — idea in plain words → recorded verbatim → shaping questions → problem, users, success measure → small vertical tasks with dependencies; keeps the repo's roadmap current (generalises `/roadmap-add`) | The principal's only required input becomes the idea |
+| F-17 | **UX design** — flows, screens and a mockup per user-facing task, reviewed against the repo's design rules and the data-presentation guide | Products get designed, not only engineered |
+| F-18 | **QA** — runs the app (the `run` pattern) and checks each acceptance criterion end to end before landing | Tests prove code; QA proves the feature |
+| F-19 | **Release and deploy** — a `[deploy]` stage in `.factory.toml` (environments, deploy, health, rollback commands); staging → health → production → watch → roll back; production stays ASK until the record is good (from FamilyOffice: `deployer.py`, `smoke_prod.sh`) | One way to ship every product |
+| F-24 | **Support** — the support desk as a department: incident log, runbook first, a support agent that investigates with read-only tools, actions only from an allowlist, fix PRs through the normal gate, escalation only with a diagnosis and a recommendation; the product keeps its runbooks and allowed actions (from FamilyOffice task 0.38) | Every live product gets watched and mended the same way |
+
+## Phase 3 — house stack and shared runtime
+
+| ID | Task | Why |
+|----|------|-----|
+| F-40 | **House stack** — the factory's defaults, written once: Temporal for anything that runs in the background, waits for a person or retries; LiteLLM for every model call; one default database and chart library; opt-outs stated in `.factory.toml`; the new-repo template (F-21) starts from it | Agents get good at one stack; reviewers and the runtime work everywhere |
+| F-41 | **AI access** — one way for every product and the factory itself to reach models: LiteLLM with model tiers and failover, keys kept in one place, prompt caching, budgets and an on/off switch for unattended spending, cost per product and run; agent jobs routed between API calls and subscription sessions (Claude Code, Codex) with the plan's usage limits respected (from FamilyOffice `common/llm/`, `common/agent_jobs/`). Rule: subscription sessions run agent work within the plan's terms; products in production call the API with keys | No product rebuilds model access; one place for keys, limits and cost |
+| F-42 | **Shared runtime package** — the building blocks a product installs: YAML process engine on Temporal, support desk core, notifications (Telegram and others), the decision queue's data, agent jobs; FamilyOffice becomes its first consumer (depends on D-1, D-2, F-40, F-41) | Build each block once; every product gets the fixes |
+
+## Phase 4 — the factory runs the work
+
+| ID | Task | Why |
+|----|------|-----|
+| F-12 | **Orchestrator** — runs a shaped task graph through the departments as Temporal workflows: each stage an activity, agents in worktrees (Orca), parallel where dependencies allow, surviving restarts, pausing for decisions | Removes the principal from step-driving |
+| F-13 | **Decision queue** — one list of what needs the principal, with options and a recommendation, on terminal and phone; the orchestrator's pause point (extends the tower's needs-you queue) | Decisions out, nothing else |
 | F-16 | **Learning loop** — when the principal corrects an agent, propose the rule that would have prevented it (banned pattern, skill line, hook) as a PR | Mistakes happen once |
 
-## Later
+## Alongside any phase
 
 | ID | Task | Why |
 |----|------|-----|
-| F-20 | Worktree bootstrap — one command for venv / node_modules links and `.env` from the example | Every new agent pays this today |
-| F-21 | New-repo template — CLAUDE.md skeleton, `.skillcheck.toml`, PR + Skills workflows, `make ci` conventions | A new repo starts inside the factory |
-| F-22 | Context-cost report — `claude plugin details` + skillcheck sizes → which skills cost most per session | Keep the always-on cost visible |
-| F-23 | Other upkeep scouts — CI health (flaky tests, slow jobs), docs drift beyond skills, dead code | Same pattern as F-01 |
+| F-14 | **Skill trigger evals** — `claude plugin eval` cases for every factory and repo skill: fires when it should, stays quiet otherwise | Skills are the factory's machinery; test them like code |
+| F-15 | **Hook pack** — PreToolUse guards that block instead of advise: push to `main`, raw `pytest` where a tier script exists, `git stash` in shared worktrees, edits to generated tables | Rules are code |
+| F-20 | **Worktree bootstrap** — one command for venv / node_modules links and `.env` from the example | Every new agent pays this today |
+| F-21 | **New-repo template** — CLAUDE.md skeleton, `.factory.toml`, `.skillcheck.toml`, PR and Skills workflows, `make ci`, the house stack | A new repo starts inside the factory |
+| F-23 | **Other upkeep scouts** — CI health (flaky tests, slow jobs), docs drift beyond skills, dead code | Same pattern as F-01 |
 
 ---
 
