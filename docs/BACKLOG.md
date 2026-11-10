@@ -26,6 +26,7 @@ moves here as a generic piece, leaving the project-specific part behind.
 | F-03 | **Task system as a factory product** — package FamilyOffice's `scripts/tasks.py` (front matter as the record, generated tables, IDs unique across worktrees, CI checks) for any repo; this backlog is its first user | Every stage of the pipeline reads and writes tasks | open |
 | F-04 | **Dogfood** — this repo gets its own `.factory.toml`, a scheduled upgrade run, its tasks in F-03's system, and every change through the gate the factory gives products | The factory is held to its own standard; what hurts here gets fixed for every product | open |
 | F-05 | **Release channel** — the laptop runs an install copy that follows `main` (`factory self-update`); development happens in a separate clone and worktrees | Today `install.sh` links the working checkout, so unmerged edits are live in every session | open — D-4 |
+| F-06 | **Several laptops** — `factory doctor` checks a laptop's install, tools and logins; one machine is named the home for schedules and unattended runs (in `~/.config/software-factory`), so two laptops never run the same job; the tower on each laptop sees that laptop's agents | Same factory everywhere, no double runs |
 
 ## Phase 1 — move what is already generic
 
@@ -49,8 +50,8 @@ moves here as a generic piece, leaving the project-specific part behind.
 
 | ID | Task | Why |
 |----|------|-----|
-| F-40 | **House stack** — the factory's defaults, written once: Temporal for anything that runs in the background, waits for a person or retries; LiteLLM for every model call; one default database and chart library; opt-outs stated in `.factory.toml`; the new-repo template (F-21) starts from it | Agents get good at one stack; reviewers and the runtime work everywhere |
-| F-41 | **AI access** — one way for every product and the factory itself to reach models: LiteLLM with model tiers and failover, keys kept in one place, prompt caching, budgets and an on/off switch for unattended spending, cost per product and run; agent jobs routed between API calls and subscription sessions (Claude Code, Codex) with the plan's usage limits respected (from FamilyOffice `common/llm/`, `common/agent_jobs/`). Rule: subscription sessions run agent work within the plan's terms; products in production call the API with keys | No product rebuilds model access; one place for keys, limits and cost |
+| F-40 | **House stack** — the factory's defaults, written once: Temporal for anything that runs in the background, waits for a person or retries; AI work through F-41 (LiteLLM underneath); one default database and chart library; opt-outs stated in `.factory.toml`; the new-repo template (F-21) starts from it | Agents get good at one stack; reviewers and the runtime work everywhere |
+| F-41 | **AI access, built the FamilyOffice way** — every piece of AI work is a typed job that runs on the backend config names: `worker` (the principal's own agent session — Claude Code or Codex on their subscription — claims the job and submits the answer), `api` (LiteLLM, pay per call, model tiers with failover, prompt caching) or `off`. Default "subscription first, then pay per call": a job no session answers in time, or one routed while a plan usage window is near its limit, follows its fallback. Budgets and an on/off switch for unattended spending, cost per product and job, every answer checked against the job's output model so behaviour holds on any backend. The principal's session can also be the operator, through the product's CLI. Switching is configuration, never code (from FamilyOffice `common/llm/`, `common/agent_jobs/`, `docs/architecture/agent-operated-office.md`) | No product rebuilds model access; one place for keys, limits and cost; the subscription does the work first |
 | F-42 | **Shared runtime package** — the building blocks a product installs: YAML process engine on Temporal, support desk core, notifications (Telegram and others), the decision queue's data, agent jobs; FamilyOffice becomes its first consumer (depends on D-1, D-2, F-40, F-41) | Build each block once; every product gets the fixes |
 
 ## Phase 4 — the factory runs the work
@@ -68,7 +69,7 @@ moves here as a generic piece, leaving the project-specific part behind.
 | F-14 | **Skill trigger evals** — `claude plugin eval` cases for every factory and repo skill: fires when it should, stays quiet otherwise | Skills are the factory's machinery; test them like code |
 | F-15 | **Hook pack** — PreToolUse guards that block instead of advise: push to `main`, raw `pytest` where a tier script exists, `git stash` in shared worktrees, edits to generated tables | Rules are code |
 | F-20 | **Worktree bootstrap** — one command for venv / node_modules links and `.env` from the example | Every new agent pays this today |
-| F-21 | **New-repo template** — CLAUDE.md skeleton, `.factory.toml`, `.skillcheck.toml`, PR and Skills workflows, `make ci`, the house stack | A new repo starts inside the factory |
+| F-21 | **New project** — `factory new <name>` creates the repo from the template: CLAUDE.md skeleton, VISION/ROADMAP, `.factory.toml`, `.skillcheck.toml`, `docs/tasks/`, `make ci`, CI and Skills workflows, the house stack (Temporal, LiteLLM, AI access) as opt-in pieces; registers the project with the factory so schedules and the tower know it | A new repo starts inside the factory on day one |
 | F-23 | **Other upkeep scouts** — CI health (flaky tests, slow jobs), docs drift beyond skills, dead code | Same pattern as F-01 |
 
 ---

@@ -174,8 +174,8 @@ def default_branch_ci(cwd: str | None) -> dict | None:
     if not repo:
         return None
     branch = repo["defaultBranchRef"]["name"]
-    runs = gh_json(cwd, "run", "list", "--branch", branch, "--limit", "1",
-                   "--json", "conclusion,status,displayTitle,url")
+    runs = gh_json(cwd, "run", "list", "--branch", branch, "--workflow", "Tests", "--limit", "1",
+                   "--json", "conclusion,status,displayTitle,url")  # not Dependabot's dynamic runs
     if not runs:
         return {"repo": repo["nameWithOwner"], "branch": branch, "outcome": "none", "words": "no CI runs"}
     r = runs[0]
@@ -477,7 +477,8 @@ def gate(number: int, repo: str) -> dict:
         return {**out, "verdict": "WAIT", "reasons": ["GitHub is still computing mergeability"]}
     main = main_checkout(repo)
     git(main, "fetch", "--quiet", "origin", pr["baseRefName"], pr["headRefName"])
-    behind = git(main, "rev-list", "--count", f"{pr['headRefOid']}..origin/{pr['baseRefName']}")
+    behind = git(main, "rev-list", "--count", f"{pr['headRefOid']}..origin/{pr['baseRefName']}",
+                 "--", ".", ":(exclude)docs")  # generated docs commits never make a PR stale
     if behind and behind != "0" and not docs_only:
         return {**out, "verdict": "FIX", "reasons": [f"{behind} commit(s) behind {pr['baseRefName']}"],
                 "fix": f"Merge origin/{pr['baseRefName']} into your branch (it is {behind} commit(s) behind), "
