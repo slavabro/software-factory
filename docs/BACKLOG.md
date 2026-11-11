@@ -8,12 +8,12 @@ The factory is the company, each repo a product it makes (VISION → "What the f
 order; tasks inside a phase can run in parallel. "From FamilyOffice" means the working version exists there and
 moves here as a generic piece, leaving the project-specific part behind.
 
-## Decisions waiting on the principal
+## Decisions
 
 | ID | Decision | Recommendation |
 |----|----------|----------------|
-| D-1 | **Portability rule scope.** CLAUDE.md rule 1 (standard library only) — does it cover only the factory's tools and hooks, or also the shared runtime (F-42), which needs Temporal, LiteLLM and Pydantic? | Tools and hooks stay standard-library; the shared runtime is a separate package with its own dependencies |
-| D-2 | **Where the shared runtime lives** — this repo or its own repo | Its own repo, released as a versioned package; this repo keeps the tools, skills and processes |
+| D-1 | **Portability rule scope.** CLAUDE.md rule 1 (standard library only) — does it cover only the factory's tools and hooks, or also the shared runtime (F-42), which needs Temporal, LiteLLM and Pydantic? | **Decided 2026-11-11:** the rule stays as it is for this repo (tools, skills, hooks); the shared runtime lives elsewhere (D-2) and may use Temporal, LiteLLM and Pydantic |
+| D-2 | **Where the shared runtime lives** — this repo or its own repo | **Decided 2026-11-11:** its own repo, released as a versioned package; products install it like any other dependency and the upgrade capability (F-01) keeps it current |
 | D-3 | **Who merges factory PRs** (F-02) | **Decided 2026-11-11:** the tower merges with the same gate; ASK for changes to hooks, guards and the gate itself |
 | D-4 | **Release model for the factory** (F-05) | **Decided 2026-11-11:** a separate install copy on each laptop that follows `main` (updates itself about hourly), so a change is live only after it merges |
 
@@ -52,7 +52,7 @@ moves here as a generic piece, leaving the project-specific part behind.
 |----|------|-----|
 | F-40 | **House stack** — the factory's defaults, written once: Temporal for anything that runs in the background, waits for a person or retries; AI work through F-41 (LiteLLM underneath); one default database and chart library; opt-outs stated in `.factory.toml`; the new-repo template (F-21) starts from it | Agents get good at one stack; reviewers and the runtime work everywhere |
 | F-41 | **AI access, built the FamilyOffice way** — every piece of AI work is a typed job that runs on the backend config names: `worker` (the principal's own agent session — Claude Code or Codex on their subscription — claims the job and submits the answer), `api` (LiteLLM, pay per call, model tiers with failover, prompt caching) or `off`. Default "subscription first, then pay per call": a job no session answers in time, or one routed while a plan usage window is near its limit, follows its fallback. Budgets and an on/off switch for unattended spending, cost per product and job, every answer checked against the job's output model so behaviour holds on any backend. The principal's session can also be the operator, through the product's CLI. Switching is configuration, never code (from FamilyOffice `common/llm/`, `common/agent_jobs/`, `docs/architecture/agent-operated-office.md`) | No product rebuilds model access; one place for keys, limits and cost; the subscription does the work first |
-| F-42 | **Shared runtime package** — the building blocks a product installs: YAML process engine on Temporal, support desk core, notifications (Telegram and others), the decision queue's data, agent jobs; FamilyOffice becomes its first consumer (depends on D-1, D-2, F-40, F-41) | Build each block once; every product gets the fixes |
+| F-42 | **Shared runtime package** (its own repo, a versioned package; products move to new versions through F-01's upgrade PRs) — the building blocks a product installs: YAML process engine on Temporal, support desk core, notifications (Telegram and others), the decision queue's data, agent jobs; FamilyOffice becomes its first consumer (depends on F-40, F-41) | Build each block once; every product gets the fixes |
 
 ## Phase 4 — the factory runs the work
 
