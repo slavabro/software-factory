@@ -17,14 +17,16 @@ laptops. It stays in a project when it encodes that project's domain or its live
 
 | Thing | Where | Why |
 |-------|-------|-----|
-| Domain reviewer skills (architecture, DAL, Temporal, LLM, wealth, frontend, Tufte, testing) | FamilyOffice `.claude/skills/` | They encode FamilyOffice's rules; they point at its CLAUDE.md files |
-| Task workflow skills (`/design-task` … `/complete-feature`, `/land`, `/review-code`) | FamilyOffice | Bound to `scripts/tasks.py`, its CI jobs and review gate. Generic shape is backlog F-11 |
+| Domain reviewer skills (architecture, DAL, Temporal, LLM, wealth, frontend, Tufte, testing) | FamilyOffice `.claude/skills/` | Until F-30 splits them: the general practice moves here, the domain facts (and `wealth-management` whole) stay |
+| Task workflow skills (`/design-task` … `/complete-feature`, `/land`, `/review-code`) | FamilyOffice | Bound to `scripts/tasks.py`, its CI jobs and review gate, until F-03 and F-11 |
+| LLM layer, agent jobs, support desk, process engine, notifications | FamilyOffice `common/`, `org/ops/`, `workflows/` | Product code today; the generic core moves to the shared runtime (F-41, F-42, F-24) |
+| Prod deployer and smoke checks | FamilyOffice `scripts/` | The generic flow becomes the deploy stage (F-19); hosts and secrets stay |
 | `.claude/fleet-brief.md` | FamilyOffice main checkout (untracked) | Per-repo technical notes the tower appends to briefs |
 | Orca `orca-cli` / `orchestration` skills | `~/.agents/skills/` | Vendor stubs that load guides from the Orca binary; versioned with Orca |
 | Anthropic synced skills | `~/.claude/skills/synced/` | Managed by claude.ai sync |
 | `~/.claude/settings.json` hooks (Orca hook relay, `notifyutil`) and status line | user settings | Written by Orca and per-machine apps; copying them would fight their installers |
 | Auto memory | `~/.claude/projects/*/memory/` | Per project and per user by design |
-| Prod deployer, backups, `.env*` | FamilyOffice / `~/FamilyOffice-prod` | Live infrastructure, not tooling |
+| Backups, `.env*`, the prod host | FamilyOffice / `~/FamilyOffice-prod` | Live infrastructure, not tooling |
 
 ## Next
 

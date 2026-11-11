@@ -29,13 +29,32 @@ remembered.
 | Stage | Who | Output | The principal |
 |-------|-----|--------|---------------|
 | Intake | intake agent | idea recorded in the repo's task system, verbatim | — |
-| Shape | shaping agent | questions answered, scope fixed, split into small vertical tasks with dependencies | answers questions, approves the split |
-| Design | designer + domain reviewers (fresh context each) | design per task, reviewed, compacted | approves designs above a size threshold |
+| Shape | product agent | problem, users and success measure; scope fixed; split into small vertical tasks with dependencies; roadmap kept current | answers questions, approves the split |
+| UX design | UX designer | flows, screens and a mockup, reviewed against the repo's design rules | approves screens that change what users see |
+| Technical design | architect + domain reviewers (fresh context each) | design per task, reviewed, compacted | approves designs above a size threshold |
 | Build | implementer | code + tests on a branch, `make ci` green | — |
 | Review | code / architect / designer lenses (fresh context) | gate block: fixed or rebutted findings | — |
+| QA | QA agent | the app run end to end against the acceptance criteria | — |
 | Land | lander + tower gate | PR, CI green, merged when the rules say MERGE | OKs only ASK merges |
+| Deploy | release agent | staging → health check → production → watch, rolled back on failure | OKs production while the record is short |
+| Support | support agent | incidents: runbook first, then a diagnosis, an allowed action or a fix PR | gets only incidents with a diagnosis and a recommendation |
 | Upkeep | scheduled scouts | upgrade PRs, drift fixes, new ideas into the inbox | sees results, decides on proposals |
 | Learn | every stage | a correction becomes a rule (skill line, banned pattern, hook) so it can't recur | — |
+
+## What the factory provides
+
+Think of the factory as the company and each repo as a product it makes. The company owns the staff, the way of
+working, the house tech stack and the shared building blocks; a product owns only its code, its domain knowledge and
+a short config (`.factory.toml`) that says how it is tested, shipped and run.
+
+| Layer | What it is | Each product keeps |
+|-------|------------|--------------------|
+| **Departments** | Product, design, engineering, review, QA, release, support, upkeep: generic agents and skills | Domain reviewers, runbooks, its own words |
+| **Processes** | Shaping → design → build → review → land → deploy → operate, the same in every repo | Commands for verify, deploy, rollback |
+| **Practice guides** | General rules for data access, workflows, LLM use, frontend, testing, data presentation | Project notes in its CLAUDE.md files (the guides point at them) |
+| **House stack** | Temporal for anything that runs in the background, waits or retries; LiteLLM for every model call; one default for databases and charts | Opt-outs, stated in config |
+| **AI access** | One way to reach models: API keys and subscription sessions, model tiers, failover, budgets, cost per run | Its budget and tiers |
+| **Shared runtime** | Building blocks a product installs instead of rebuilding: process engine, support desk, notifications, decisions, agent jobs | Its processes and actions |
 
 ## Principles
 
@@ -49,6 +68,8 @@ remembered.
   good (the merge gate's MERGE/ASK split is the model).
 - **One owner per fact.** The factory points at a repo's own rules; it never copies them.
 - **Portable.** Same behaviour on any laptop and in CI; repo specifics live in repo config, not in the factory.
+- **The factory builds itself.** This repo is managed by the factory exactly like a product: its tasks in the
+  factory's task system, its upkeep scheduled, its changes through the same gate, its release only on merge.
 - **Red-green safe, plain words** in everything the principal reads.
 
 ## Not the goal
