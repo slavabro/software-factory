@@ -14,19 +14,19 @@ moves here as a generic piece, leaving the project-specific part behind.
 |----|----------|----------------|
 | D-1 | **Portability rule scope.** CLAUDE.md rule 1 (standard library only) — does it cover only the factory's tools and hooks, or also the shared runtime (F-42), which needs Temporal, LiteLLM and Pydantic? | Tools and hooks stay standard-library; the shared runtime is a separate package with its own dependencies |
 | D-2 | **Where the shared runtime lives** — this repo or its own repo | Its own repo, released as a versioned package; this repo keeps the tools, skills and processes |
-| D-3 | **Who merges factory PRs** (F-02) | The tower with the same gate; ASK for changes to hooks, guards and the gate itself |
-| D-4 | **Release model for the factory** (F-05) | A separate install copy that follows `main`, so a change is live only after it merges |
+| D-3 | **Who merges factory PRs** (F-02) | **Decided 2026-11-11:** the tower merges with the same gate; ASK for changes to hooks, guards and the gate itself |
+| D-4 | **Release model for the factory** (F-05) | **Decided 2026-11-11:** a separate install copy on each laptop that follows `main` (updates itself about hourly), so a change is live only after it merges |
 
 ## Phase 0 — the factory runs on itself
 
 | ID | Task | Why | Status |
 |----|------|-----|--------|
 | F-01 | **Upgrade capability** (dependency scout) — see spec below | Upgrades, security fixes and new capabilities are found by reading release notes, not by luck | v0.1 built: `factory upgrade …`, `/factory:upgrade`, `factory run/schedule`; first scheduled run on FamilyOffice next |
-| F-02 | **Factory PR ownership** — who reviews and merges factory PRs and whether Dependabot can bump the private action pin in consumer repos | Factory changes need the same landing discipline as product code | open — D-3 |
+| F-02 | **Factory PR ownership** — who reviews and merges factory PRs and whether Dependabot can bump the private action pin in consumer repos | Factory changes need the same landing discipline as product code | decided (D-3) — to build |
 | F-03 | **Task system as a factory product** — package FamilyOffice's `scripts/tasks.py` (front matter as the record, generated tables, IDs unique across worktrees, CI checks) for any repo; this backlog is its first user | Every stage of the pipeline reads and writes tasks | open |
 | F-04 | **Dogfood** — this repo gets its own `.factory.toml`, a scheduled upgrade run, its tasks in F-03's system, and every change through the gate the factory gives products | The factory is held to its own standard; what hurts here gets fixed for every product | open |
-| F-05 | **Release channel** — the laptop runs an install copy that follows `main` (`factory self-update`); development happens in a separate clone and worktrees | Today `install.sh` links the working checkout, so unmerged edits are live in every session | open — D-4 |
-| F-06 | **Several laptops** — `factory doctor` checks a laptop's install, tools and logins; one machine is named the home for schedules and unattended runs (in `~/.config/software-factory`), so two laptops never run the same job; the tower on each laptop sees that laptop's agents | Same factory everywhere, no double runs |
+| F-05 | **Release channel** — the laptop runs an install copy that follows `main` (`factory self-update`); development happens in a separate clone and worktrees | Today `install.sh` links the working checkout, so unmerged edits are live in every session | decided (D-4) — to build |
+| F-06 | **Several laptops** — `factory doctor` checks a laptop's install, tools and logins; the home for schedules and unattended runs is one setting (`~/.config/software-factory`, default: the laptop where they are installed today), so two laptops never run the same job and moving to another laptop or a server is a config change; the tower on each laptop sees that laptop's agents | Same factory everywhere, no double runs |
 
 ## Phase 1 — move what is already generic
 
