@@ -169,16 +169,22 @@ def pr_for(branch: str, cwd: str | None) -> dict | None:
     }
 
 
+def latest_ci_run(runs: list[dict]) -> dict | None:
+    """Newest run that is the repo's own CI, whatever its workflow is called: Dependabot's update jobs
+    (event "dynamic") run on the default branch too, and are not CI."""
+    return next((r for r in runs if r.get("event") != "dynamic"), None)
+
+
 def default_branch_ci(cwd: str | None) -> dict | None:
     repo = gh_json(cwd, "repo", "view", "--json", "nameWithOwner,defaultBranchRef")
     if not repo:
         return None
     branch = repo["defaultBranchRef"]["name"]
-    runs = gh_json(cwd, "run", "list", "--branch", branch, "--workflow", "Tests", "--limit", "1",
-                   "--json", "conclusion,status,displayTitle,url")  # not Dependabot's dynamic runs
-    if not runs:
+    runs = gh_json(cwd, "run", "list", "--branch", branch, "--limit", "20",
+                   "--json", "conclusion,status,displayTitle,url,event")
+    r = latest_ci_run(runs or [])
+    if not r:
         return {"repo": repo["nameWithOwner"], "branch": branch, "outcome": "none", "words": "no CI runs"}
-    r = runs[0]
     outcome = r["conclusion"] or r["status"]
     return {"repo": repo["nameWithOwner"], "branch": branch, "outcome": outcome,
             "words": f"{outcome} · {short(r['displayTitle'], 70)}", "url": r["url"]}
