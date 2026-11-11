@@ -1,12 +1,17 @@
-name: skillcheck
-description: Lint Claude Code skills, commands, subagents and CLAUDE.md files (software-factory)
+name: software-factory
+description: skillcheck, or any factory command (e.g. the task system), at the version this action is pinned to
 inputs:
   path:
-    description: Repo root to check
+    description: Repo root
     default: "."
   args:
-    description: Extra skillcheck arguments (e.g. --strict)
+    description: Extra skillcheck arguments (e.g. --strict), when run is skillcheck
     default: "--strict"
+  run:
+    description: >-
+      "skillcheck" (default) lints the repo's skills; "setup" puts `factory` and `skillcheck` on PATH and exports
+      FACTORY_DIR (this copy) for later steps; anything else is a factory command line, e.g. "task check".
+    default: "skillcheck"
 runs:
   using: composite
   steps:
@@ -16,4 +21,13 @@ runs:
     - shell: bash
       env:
         PYTHONPATH: ${{ github.action_path }}/plugins/factory
-      run: python3 -m skillcheck "${{ inputs.path }}" --format github ${{ inputs.args }}
+        RUN: ${{ inputs.run }}
+        REPO: ${{ inputs.path }}
+        ARGS: ${{ inputs.args }}
+        DIR: ${{ github.action_path }}
+      run: |
+        case "$RUN" in
+          skillcheck) python3 -m skillcheck "$REPO" --format github $ARGS ;;
+          setup) echo "$DIR/home/bin" >> "$GITHUB_PATH"; echo "FACTORY_DIR=$DIR" >> "$GITHUB_ENV" ;;
+          *) python3 -m sfactory --repo "$REPO" $RUN ;;
+        esac

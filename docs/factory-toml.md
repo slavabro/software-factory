@@ -14,7 +14,10 @@ commands = ["make ci"]        # proves the code still works; every upgrade PR mu
 [land]
 with = "skill:land"           # "skill:<name>" invokes that repo skill; anything else is a shell command
 
-[tasks]                       # placeholders are shell-quoted by `factory task new|exists`
+[tasks]
+system = "factory"            # the factory's task system (docs/tasks.md); "commands" = the two commands below
+legacy_duplicate_ids = []     # IDs that shipped twice before IDs were checked
+# system = "commands": placeholders are shell-quoted by `factory task new|exists`
 new = "gh issue create --title {title} --body-file {body_file}"   # {title} {body_file} {priority}
 exists = "gh issue list --state open --search {query} --json number --jq 'length > 0' | grep -q true"  # exit 0 = exists
 
@@ -65,7 +68,7 @@ max_prs = 3                   # per run
 | `factory config` | resolved config |
 | `factory upgrade scan [--json]` | what can move, how far (patch / minor / major), risky or not, release-notes links |
 | `<check> 2>&1 \| factory upgrade deprecations` | deprecation warnings raised from the repo's own code; exit 1 while any |
-| `factory task new --title T --body-file F` / `factory task exists Q` | the repo's `[tasks]` commands with every value shell-quoted |
+| `factory task …` | the task system ([tasks.md](tasks.md)): `init`, `new`, `start`, `subtask`, `complete`, `close`, `set`, `show`, `check`, `check-pr`, `render`, `exists`; with `system = "commands"` only `new` / `exists`, running the repo's commands with every value shell-quoted |
 | `factory run upgrade [--dry-run] [--keep]` | the whole upgrade unattended: fresh worktree off `origin/<default_branch>`, `[worktree] setup`, then the agent runs `/factory:upgrade`; one run per repo at a time; log under `~/.cache/software-factory/logs/<repo>/` |
 | `factory schedule install\|remove\|show upgrade [--print]` | the repo's `schedule` as a launchd agent (macOS), a systemd user timer (Linux) or a crontab line (anything else) |
 
