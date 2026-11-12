@@ -38,7 +38,7 @@ remembered.
 | Land | lander + tower gate | PR, CI green, merged when the rules say MERGE | OKs only ASK merges |
 | Deploy | release agent | staging → health check → production → watch, rolled back on failure | OKs production while the record is short |
 | Support | support agent | incidents: runbook first, then a diagnosis, an allowed action or a fix PR | gets only incidents with a diagnosis and a recommendation |
-| Upkeep | scheduled scouts | upgrade PRs, drift fixes, new ideas into the inbox | sees results, decides on proposals |
+| Upkeep | standing teams (QA, DevOps, upgrades, security, code health, factory improver), each a Temporal workflow woken by a schedule or an event | small PRs through the normal gate, or tasks | sees results, decides on proposals |
 | Learn | every stage | a correction becomes a rule (skill line, banned pattern, hook) so it can't recur | — |
 
 ## What the factory provides
@@ -52,12 +52,16 @@ a short config (`.factory.toml`) that says how it is tested, shipped and run.
 | **Departments** | Product, design, engineering, review, QA, release, support, upkeep: generic agents and skills | Domain reviewers, runbooks, its own words |
 | **Processes** | Shaping → design → build → review → land → deploy → operate, the same in every repo | Commands for verify, deploy, rollback |
 | **Practice guides** | General rules for data access, workflows, LLM use, frontend, testing, data presentation | Project notes in its CLAUDE.md files (the guides point at them) |
-| **House stack** | Temporal for anything that runs in the background, waits or retries; LiteLLM for every model call; one default for databases and charts | Opt-outs, stated in config |
+| **House stack** | Temporal for anything that runs in the background, on a schedule, on an event, waits or retries (the factory's own processes included); LiteLLM for every model call; one default for databases and charts | Opt-outs, stated in config |
 | **AI access** | One way to reach models: API keys and subscription sessions, model tiers, failover, budgets, cost per run | Its budget and tiers |
 | **Shared runtime** | Building blocks a product installs instead of rebuilding: process engine, support desk, notifications, decisions, agent jobs | Its processes and actions |
 
 ## Principles
 
+- **Foundation first, no technical debt.** Infrastructure and shared foundations are built before the
+  features that stand on them, and built the way they are meant to end up. Nothing is shipped as a stopgap to
+  be replaced later; when a task finds its base missing, the base comes first. This holds for the factory and
+  for every product it builds.
 - **Ideas in, decisions out.** The principal never has to drive a step. Everything they see is either a result or a
   decision with options.
 - **Small tasks, each landable alone.** A task that can't ship by itself is split again.

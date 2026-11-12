@@ -6,16 +6,19 @@ never name a project's domain, paths or people (docs may cite a consumer as an e
 
 ## Rules
 
-1. **Portable.** Python 3.11+ standard library only; POSIX `sh` for scripts; no absolute home paths (use `~` or
+1. **Foundation first, no technical debt.** Build the right base before what stands on it, the way it is meant
+   to end up: no stopgap that is planned to be replaced, no "for now" version. If the base a task needs is
+   missing, building that base is the task. The same rule holds for every product the factory builds.
+2. **Portable.** Python 3.11+ standard library only; POSIX `sh` for scripts; no absolute home paths (use `~` or
    resolve from the script). Everything must run on a fresh laptop after `install.sh` and in GitHub Actions.
-2. **Generic.** A project-specific rule belongs in that project's `.skillcheck.toml` or skills, not in a check here.
+3. **Generic.** A project-specific rule belongs in that project's `.skillcheck.toml` or skills, not in a check here.
    Every check is configurable (severity override, budgets) and has a test in `tests/`.
-3. **One owner per fact.** Skills here point at docs and code; they don't restate them. Rule sources live in
+4. **One owner per fact.** Skills here point at docs and code; they don't restate them. Rule sources live in
    `plugins/factory/skills/skills-review/references/rules.md`; `checks.RULES` is the code-side list — keep them in step.
-4. **Silent when healthy.** Hooks print nothing unless something is wrong, never fail a session, and stay under 1 s.
-5. **Red-green safe.** No red-vs-green as the only signal in any output (the user is red-green colour-deficient).
-6. **No AI attribution** in commits, PRs or files.
-7. **Land through a PR**; CI (`.github/workflows/ci.yml`) must be green.
+5. **Silent when healthy.** Hooks print nothing unless something is wrong, never fail a session, and stay under 1 s.
+6. **Red-green safe.** No red-vs-green as the only signal in any output (the user is red-green colour-deficient).
+7. **No AI attribution** in commits, PRs or files.
+8. **Land through a PR**; CI (`.github/workflows/ci.yml`) must be green.
 
 ## Check before you push
 
