@@ -64,7 +64,10 @@ class Config:
     default_branch: str = "main"
     verify: list[str] = field(default_factory=lambda: ["make ci"])  # proves the code still works
     land: str = "skill:land"  # "skill:<name>" or a shell command that opens the PR
-    # Task filing. Placeholders are shell-quoted by `factory task …`: {title} {body_file} {priority} {query}.
+    # Tasks: "factory" = the factory's task system (docs/tasks/, `factory task`); "commands" = new/exists below.
+    tasks_system: str = "factory"
+    tasks_legacy_duplicate_ids: list[str] = field(default_factory=list)  # IDs that shipped twice before IDs were checked
+    # With system = "commands". Placeholders are shell-quoted by `factory task …`: {title} {body_file} {priority} {query}.
     new_task: str = "gh issue create --title {title} --body-file {body_file}"
     task_exists: str = "gh issue list --state open --search {query} --json number --jq 'length > 0' | grep -q true"
     worktree_setup: list[str] = field(default_factory=list)  # run in a fresh worktree; $REPO = the main checkout
@@ -89,7 +92,7 @@ SECTIONS = {
     "repo": {"name", "default_branch"},
     "verify": {"commands"},
     "land": {"with"},
-    "tasks": {"new", "exists"},
+    "tasks": {"system", "new", "exists", "legacy_duplicate_ids"},
     "worktree": {"setup", "path"},
     "agent": {"command", "allowed_tools", "extra_allowed_tools", "disallowed_tools", "extra_disallowed_tools", "timeout_minutes"},
     "report": {"with"},
@@ -137,6 +140,10 @@ def parse(root: Path, text: str | None, path: Path) -> Config:
     cfg.verify = list(raw.get("verify", {}).get("commands", cfg.verify))
     cfg.land = str(raw.get("land", {}).get("with", cfg.land))
     tasks = raw.get("tasks", {})
+    cfg.tasks_system = str(tasks.get("system", "commands" if {"new", "exists"} & set(tasks) else cfg.tasks_system))
+    if cfg.tasks_system not in ("factory", "commands"):
+        raise ConfigError(f'{path}: tasks.system must be "factory" or "commands", got "{cfg.tasks_system}"')
+    cfg.tasks_legacy_duplicate_ids = [str(i) for i in tasks.get("legacy_duplicate_ids", [])]
     cfg.new_task = str(tasks.get("new", cfg.new_task))
     cfg.task_exists = str(tasks.get("exists", cfg.task_exists))
     wt = raw.get("worktree", {})
