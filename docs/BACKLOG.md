@@ -31,7 +31,8 @@ inside a phase can run in parallel. "From FamilyOffice" means the working versio
 
 ## Phase 1 — foundation
 
-The base everything later stands on, built the way it is meant to end up.
+The base everything later stands on, built the way it is meant to end up. Design and build order:
+[designs/foundation.md](designs/foundation.md).
 
 | ID | Task | Why |
 |----|------|-----|
