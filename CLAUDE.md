@@ -9,7 +9,7 @@ never name a project's domain, paths or people (docs may cite a consumer as an e
 1. **Foundation first, no technical debt.** Build the right base before what stands on it, the way it is meant
    to end up: no stopgap that is planned to be replaced, no "for now" version. If the base a task needs is
    missing, building that base is the task. The same rule holds for every product the factory builds.
-2. **Portable.** Python 3.11+ standard library only; POSIX `sh` for scripts; no absolute home paths (use `~` or
+2. **Portable.** Python 3.11+ standard library only (the Temporal engine in `engine/` is the one exception, with its own dependencies); POSIX `sh` for scripts; no absolute home paths (use `~` or
    resolve from the script). Everything must run on a fresh laptop after `install.sh` and in GitHub Actions.
 3. **Generic.** A project-specific rule belongs in that project's `.skillcheck.toml` or skills, not in a check here.
    Every check is configurable (severity override, budgets) and has a test in `tests/`.

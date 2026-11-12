@@ -16,7 +16,7 @@ inside a phase can run in parallel. "From FamilyOffice" means the working versio
 | D-2 | **Where the shared runtime lives** — this repo or its own repo | **Decided 2026-11-11:** its own repo, released as a versioned package; products install it like any other dependency and the upgrade capability (F-01) keeps it current |
 | D-3 | **Who merges factory PRs** (F-02) | **Decided 2026-11-11:** the tower merges with the same gate; ASK for changes to hooks, guards and the gate itself |
 | D-4 | **Release model for the factory** (F-05) | **Decided 2026-11-11:** a separate install copy on each laptop that follows `main` (updates itself about hourly), so a change is live only after it merges |
-| D-5 | **Where the factory's engine code lives** (F-50). Its workflows need the Temporal SDK, and D-1 keeps this repo standard-library only | **Open.** Recommended: an `engine/` package in this repo with its own dependencies, built on the shared runtime (F-42); rule 2 keeps covering the tools, skills, hooks and the CI action, which must run on a bare laptop. The alternative is a third repo just for the engine |
+| D-5 | **Where the factory's engine code lives** (F-50). Its workflows need the Temporal SDK, and D-1 keeps this repo standard-library only | **Decided 2026-11-12:** an `engine/` package in this repo with its own dependencies, built on the shared runtime (F-42); rule 2 keeps covering the tools, skills, hooks and the CI action, which must run on a bare laptop |
 
 ## Phase 0 — the factory runs on itself
 
