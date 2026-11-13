@@ -1,0 +1,100 @@
+# The factory engine's own Temporal: server, Postgres and UI, separate from every product's (docs/designs/engine.md,
+# section 1). Started by `factory engine install` as Compose project `software-factory`; nothing here is shared
+# with a product's containers. Host ports only change (container ports stay Temporal's); Postgres is not published.
+# Secrets come from ~/.config/software-factory/engine.env (written by install, mode 600).
+name: software-factory
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${ENGINE_DB_PASSWORD:?run factory engine install}
+    volumes:
+      - temporal-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    logging: *logging
+
+  # One-shot: Temporal's two databases at the schema this admin-tools image ships (idempotent, every `up`).
+  temporal-schema:
+    image: temporalio/admin-tools:1.32.0
+    restart: "no"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${ENGINE_DB_PASSWORD}
+      POSTGRES_SEEDS: db
+    volumes:
+      - ./temporal:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/setup-schema.sh"]
+    logging: *logging
+
+  temporal:
+    image: temporalio/server:1.32.0
+    restart: unless-stopped
+    depends_on:
+      temporal-schema:
+        condition: service_completed_successfully
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${ENGINE_DB_PASSWORD}
+      POSTGRES_SEEDS: db
+      BIND_ON_IP: 0.0.0.0
+      DYNAMIC_CONFIG_FILE_PATH: /etc/temporal/config/dynamicconfig/docker.yaml
+    volumes:
+      - ./temporal/dynamicconfig.yaml:/etc/temporal/config/dynamicconfig/docker.yaml:ro
+    ports:
+      - "127.0.0.1:${ENGINE_SERVER_PORT:-7243}:7233"
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "7233"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 60s
+    logging: *logging
+
+  # One-shot: namespace `factory` (30 days of closed history) and the search attributes the engine sets.
+  temporal-setup:
+    image: temporalio/admin-tools:1.32.0
+    restart: "no"
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+    volumes:
+      - ./temporal:/scripts:ro
+    entrypoint: ["/bin/sh", "/scripts/setup-namespace.sh"]
+    logging: *logging
+
+  temporal-ui:
+    image: temporalio/ui:2.57.0
+    restart: unless-stopped
+    depends_on:
+      temporal:
+        condition: service_healthy
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_DEFAULT_NAMESPACE: factory
+    ports:
+      - "127.0.0.1:${ENGINE_UI_PORT:-8243}:8080"
+    logging: *logging
+
+volumes:
+  temporal-db:

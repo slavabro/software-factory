@@ -152,6 +152,28 @@ class ConfigAndTaskTests(Repo):
         with self.assertRaises(config.ConfigError):
             config.load(self.root)
 
+    def test_teams_come_from_their_tables_and_upgrade_from_its_section(self):
+        write(self.root, ".factory.toml",
+              '[teams.qa]\nprompt = "/factory:qa"\nschedule = "0 2 * * *"\nwake_on = ["ci_red", "merged"]\n'
+              '[upgrade]\nschedule = "0 6 * * 1"\n')
+        teams = config.load(self.root).teams()
+        self.assertEqual(sorted(teams), ["qa", "upgrade"])
+        self.assertEqual((teams["qa"].schedule, teams["qa"].wake_on, teams["qa"].budget_minutes), ("0 2 * * *", ["ci_red", "merged"], 90))
+        self.assertEqual((teams["upgrade"].prompt, teams["upgrade"].schedule), ("/factory:upgrade", "0 6 * * 1"))
+        write(self.root, ".factory.toml", "[upgrade]\nenabled = false\n")
+        self.assertEqual(config.load(self.root).teams(), {})
+
+    def test_a_bad_team_is_an_error(self):
+        for body in ('[teams.qa]\nschedule = "0 2 * * *"\n',  # no prompt
+                     '[teams.qa]\nprompt = "/x"\nwake_on = ["ci_blue"]\n',  # unknown event
+                     '[teams.qa]\nprompt = "/x"\nbudget = 5\n',  # unknown key
+                     '[teams.qa]\nprompt = "/x"\nbudget_minutes = "5"\n',  # wrong type
+                     '[teams.upgrade]\nprompt = "/x"\n',  # owned by [upgrade]
+                     '[teams.QA]\nprompt = "/x"\n'):  # bad name
+            write(self.root, ".factory.toml", body)
+            with self.assertRaises(config.ConfigError, msg=body):
+                config.load(self.root)
+
     def test_default_tools_deny_merge_and_default_branch_push(self):
         argv = runner.agent_argv(config.load(self.root), "/x")
         denied = argv[argv.index("--disallowedTools") + 1]

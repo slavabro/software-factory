@@ -7,6 +7,7 @@ safety setting). Reference with every key: docs/factory-toml.md.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import tomllib
 from dataclasses import dataclass, field, fields
@@ -57,6 +58,20 @@ class Upgrade:
     max_prs: int = 3  # per run
 
 
+# Why a team is woken besides its schedule (engine events, docs/designs/engine.md).
+WAKE_REASONS = ("ci_red", "deploy_failed", "incident", "merged")
+
+
+@dataclass
+class Team:
+    """A standing team: an agent session the engine runs on this repo on a schedule and on events."""
+
+    prompt: str = ""  # what the agent session is asked to do, e.g. "/factory:qa"
+    schedule: str = "off"  # cron (UTC); "off" = events and manual runs only
+    budget_minutes: int = 90  # one run's agent time across retries
+    wake_on: list[str] = field(default_factory=list)  # events that wake it (WAKE_REASONS)
+
+
 @dataclass
 class Config:
     root: Path
@@ -82,6 +97,16 @@ class Config:
     agent_timeout_minutes: int = 180
     report_with: str = ""  # shell command run with {file} = the run's digest; empty = path printed to the log
     upgrade: Upgrade = field(default_factory=Upgrade)
+    extra_teams: dict[str, Team] = field(default_factory=dict)  # [teams.<name>]
+
+    def teams(self) -> dict[str, Team]:
+        """Every team the engine runs here. The upgrade capability is the team `upgrade`, configured by [upgrade]."""
+        teams = dict(self.extra_teams)
+        if self.upgrade.enabled:
+            teams["upgrade"] = Team(
+                prompt="/factory:upgrade", schedule=self.upgrade.schedule, budget_minutes=self.agent_timeout_minutes
+            )
+        return teams
 
 
 class ConfigError(ValueError):
@@ -97,7 +122,10 @@ SECTIONS = {
     "agent": {"command", "allowed_tools", "extra_allowed_tools", "disallowed_tools", "extra_disallowed_tools", "timeout_minutes"},
     "report": {"with"},
     "upgrade": {f.name for f in fields(Upgrade)},
+    "teams": set(),  # one table per team, keys TEAM_KEYS
 }
+TEAM_KEYS = {f.name for f in fields(Team)}
+TEAM_NAME = re.compile(r"[a-z][a-z0-9-]*")
 
 
 def _check(raw: dict, path: Path) -> None:
@@ -106,6 +134,9 @@ def _check(raw: dict, path: Path) -> None:
             raise ConfigError(f"{path}: unknown section [{section}] (known: {', '.join(sorted(SECTIONS))})")
         if not isinstance(body, dict):
             raise ConfigError(f"{path}: [{section}] must be a table")
+        if section == "teams":
+            _check_teams(body, path)
+            continue
         for key in body:
             if key not in SECTIONS[section]:
                 raise ConfigError(f"{path}: unknown key {section}.{key} (known: {', '.join(sorted(SECTIONS[section]))})")
@@ -114,6 +145,31 @@ def _check(raw: dict, path: Path) -> None:
         want = type(getattr(defaults, key))
         if not isinstance(value, want) or (want is int and isinstance(value, bool)):
             raise ConfigError(f"{path}: upgrade.{key} must be {want.__name__}, got {type(value).__name__}")
+
+
+def _check_teams(teams: dict, path: Path) -> None:
+    defaults = Team()
+    for name, body in teams.items():
+        where = f"{path}: teams.{name}"
+        if not TEAM_NAME.fullmatch(name):
+            raise ConfigError(f"{where}: a team name is lowercase letters, digits and dashes")
+        if name == "upgrade":
+            raise ConfigError(f"{where}: the upgrade team is configured by [upgrade]")
+        if not isinstance(body, dict):
+            raise ConfigError(f"{where} must be a table")
+        for key, value in body.items():
+            if key not in TEAM_KEYS:
+                raise ConfigError(f"{where}: unknown key {key} (known: {', '.join(sorted(TEAM_KEYS))})")
+            want = type(getattr(defaults, key))
+            if not isinstance(value, want) or (want is int and isinstance(value, bool)):
+                raise ConfigError(f"{where}.{key} must be {want.__name__}, got {type(value).__name__}")
+        if not body.get("prompt"):
+            raise ConfigError(f"{where}: prompt is required")
+        bad = [r for r in body.get("wake_on", []) if r not in WAKE_REASONS]
+        if bad:
+            raise ConfigError(f"{where}.wake_on: unknown {', '.join(bad)} (known: {', '.join(WAKE_REASONS)})")
+        if body.get("budget_minutes", 1) < 1:
+            raise ConfigError(f"{where}.budget_minutes must be at least 1")
 
 
 def load(root: Path) -> Config:
@@ -125,6 +181,11 @@ def load_ref(root: Path, ref: str) -> Config:
     """The config as committed at `ref` (e.g. origin/main) — what a run will use, whatever the checkout holds."""
     shown = subprocess.run(["git", "show", f"{ref}:{CONFIG_NAME}"], cwd=root, capture_output=True, text=True)
     return parse(root, shown.stdout if shown.returncode == 0 else None, Path(f"{ref}:{CONFIG_NAME}"))
+
+
+def committed(root: Path, ref: str) -> bool:
+    """Whether `ref` has a .factory.toml: a repo without one is not opted in to unattended factory work."""
+    return subprocess.run(["git", "cat-file", "-e", f"{ref}:{CONFIG_NAME}"], cwd=root, capture_output=True).returncode == 0
 
 
 def parse(root: Path, text: str | None, path: Path) -> Config:
@@ -159,4 +220,5 @@ def parse(root: Path, text: str | None, path: Path) -> Config:
     cfg.report_with = str(raw.get("report", {}).get("with", cfg.report_with))
     for key, value in raw.get("upgrade", {}).items():
         setattr(cfg.upgrade, key, value)
+    cfg.extra_teams = {name: Team(**body) for name, body in raw.get("teams", {}).items()}
     return cfg

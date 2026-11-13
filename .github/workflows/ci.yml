@@ -41,3 +41,19 @@ jobs:
           cd "$RUNNER_TEMP"
           python3 -c "import factory_runtime, pathlib; p = pathlib.Path(factory_runtime.__file__).parent; assert 'site-packages' in str(p), p; assert (p / 'py.typed').exists()"
           python3 -m unittest discover -s tests -t . -v
+  engine:
+    name: Engine (Temporal workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.13"
+      - run: python3 -m pip install -r engine/requirements.lock -e runtime -e engine mypy==2.4.1
+      - working-directory: engine
+        run: python3 -m mypy engine
+      - working-directory: engine
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          python3 -m unittest discover -s tests -t . -v

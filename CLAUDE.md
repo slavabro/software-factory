@@ -27,6 +27,7 @@ python3 -m unittest discover -s tests
 PYTHONPATH=plugins/factory python3 -m skillcheck . --strict
 claude plugin validate --strict . && claude plugin validate --strict plugins/factory
 # runtime/ (in a virtualenv): pip install ./runtime && (cd runtime && python -m unittest discover -s tests -t .)
+# engine/ (in a virtualenv): pip install -r engine/requirements.lock -e runtime -e engine && (cd engine && python -m mypy engine && python -m unittest discover -s tests -t .)
 ```
 
 ## Adding

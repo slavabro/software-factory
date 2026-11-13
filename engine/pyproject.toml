@@ -1,0 +1,29 @@
+[project]
+name = "factory-engine"
+dynamic = ["version"]
+description = "The software factory's own engine: standing teams as Temporal workflows (docs/designs/engine.md)"
+requires-python = ">=3.11"
+dependencies = [
+    "factory-runtime",
+    "temporalio>=1.36,<2",
+    "pydantic>=2.10,<3",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["engine*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "engine.__version__" }
+
+[tool.mypy]
+strict = true
+mypy_path = "../runtime"
+
+[[tool.mypy.overrides]]
+module = ["sfactory", "sfactory.*"]  # the factory's standard-library code, checked by its own tests
+ignore_missing_imports = true
+follow_imports = "skip"
