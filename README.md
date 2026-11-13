@@ -36,7 +36,7 @@ without a clone: `claude plugin marketplace add slavabro/software-factory` then
 ## Use in a repo
 
 - Local: `skillcheck --strict` from the repo root (a `make skills-check` target is the convention).
-- CI, as a PR check (the repo must be allowed to use this private repo's actions — already set for slavabro's repos):
+- CI, as a PR check (the repo is public, so any repo can use the action):
 
   ```yaml
   - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
