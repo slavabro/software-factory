@@ -1,11 +1,12 @@
 [project]
 name = "factory-runtime"
 dynamic = ["version"]
-description = "Shared runtime for products the software factory builds: the Temporal core, and next the process engine"
+description = "Shared runtime for products the software factory builds: the Temporal core and the process engine"
 requires-python = ">=3.11"
 dependencies = [
     "temporalio>=1.35,<2",
     "pydantic>=2.10,<3",
+    "pyyaml>=6,<7",
 ]
 
 [build-system]

@@ -1,0 +1,63 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  Workflow (child) steps: default id `{name}_{uuid4}` and the parent's task queue, explicit workflow_id and
+  task_queue, args as a dict, a list and absent ({}), wait_for_result false ({"child_workflow_id"}), every
+  parent_close_policy value and an invalid one (default kept), execution_timeout, a child outliving its
+  execution_timeout and a failing child under on_error continue.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+input: {label: alpha}
+metadata: {source: golden}
+process:
+  steps:
+    - id: child_default
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      args: {label: "{{input.label}}", missing: "{{results.nope}}"}
+    - id: child_explicit
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      workflow_id: golden-child-explicit
+      task_queue: process-engine-golden-alt
+      args: {from_previous: "{{results.child_default.received}}"}
+    - id: child_list_args
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      args: [one, "{{input.label}}"]
+    - id: child_no_args
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+    - id: fire_and_forget
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      args: {mode: fire_and_forget}
+      wait_for_result: false
+      parent_close_policy: abandon
+    - id: policy_terminate
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      parent_close_policy: terminate
+    - id: policy_request_cancel
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      parent_close_policy: request_cancel
+    - id: policy_invalid
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      parent_close_policy: obliterate
+    - id: with_execution_timeout
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      execution_timeout: 120
+    - id: child_failure
+      type: workflow
+      workflow_name: GoldenFailingChildWorkflow
+      on_error: continue
+    - id: child_times_out
+      type: workflow
+      workflow_name: GoldenSlowChildWorkflow
+      execution_timeout: 60
+      on_error: continue
+    - id: last
+      type: activity
+      activity: golden_value_activity
+      args: ["{{results.fire_and_forget.child_workflow_id}}"]

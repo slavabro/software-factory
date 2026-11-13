@@ -1,0 +1,74 @@
+{
+  "case": "fatal_activity.ConditionalProcessWorkflow",
+  "workflow_id": "golden-fatal_activity-conditional",
+  "uuid4_draws": 2,
+  "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "first"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_fail_activity",
+      "activity_id": "2",
+      "task_queue": "process-engine-golden",
+      "input": [],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 1,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "fail_workflow",
+      "failure": {
+        "message": "Activity task failed",
+        "info": "activity_failure_info",
+        "cause": {
+          "message": "golden activity failed",
+          "info": "application_failure_info",
+          "type": "GoldenFatalError",
+          "non_retryable": false
+        }
+      }
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "first"
+        ],
+        "results": {
+          "first": "first"
+        }
+      }
+    }
+  ]
+}

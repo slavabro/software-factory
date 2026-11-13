@@ -1,0 +1,353 @@
+{
+  "case": "activity_steps.LinearProcessWorkflow",
+  "workflow_id": "golden-activity_steps-linear",
+  "uuid4_draws": 12,
+  "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_echo_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_echo_activity",
+      "activity_id": "2",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "alpha"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 15.0,
+      "heartbeat_timeout": 5.0,
+      "retry_policy": {
+        "initial_interval": 2.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 200.0,
+        "maximum_attempts": 5,
+        "non_retryable_error_types": [
+          "GoldenFatalError",
+          "GoldenOtherError"
+        ]
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_echo_activity",
+      "activity_id": "3",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "from_results": [
+            "alpha"
+          ],
+          "whole_result": {
+            "activity": "golden_echo_activity",
+            "args": []
+          },
+          "from_input": 42,
+          "input_list": [
+            [
+              1,
+              2,
+              3
+            ],
+            "literal"
+          ],
+          "missing_field": null,
+          "missing_step": null,
+          "missing_input": null,
+          "partial_string": "prefix {{input.label}} suffix",
+          "item_outside_loop": null,
+          "item_field_outside_loop": null,
+          "number": 7,
+          "flag": true,
+          "nothing": null
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_echo_activity",
+      "activity_id": "golden-fixed-activity-id",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "alpha"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": "alpha"
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_echo_activity",
+      "activity_id": "5",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "only_key"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_fail_activity",
+      "activity_id": "6",
+      "task_queue": "process-engine-golden",
+      "input": [],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 2,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_fail_activity",
+      "activity_id": "7",
+      "task_queue": "process-engine-golden",
+      "input": [],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 4,
+        "non_retryable_error_types": [
+          "GoldenFatalError"
+        ]
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "8",
+      "task_queue": "process-engine-golden",
+      "input": [
+        null
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "complete_workflow",
+      "result": [
+        {
+          "plain": {
+            "activity": "golden_echo_activity",
+            "args": []
+          },
+          "with_options": {
+            "activity": "golden_echo_activity",
+            "args": [
+              "alpha"
+            ]
+          },
+          "templates": {
+            "activity": "golden_echo_activity",
+            "args": [
+              {
+                "from_results": [
+                  "alpha"
+                ],
+                "whole_result": {
+                  "activity": "golden_echo_activity",
+                  "args": []
+                },
+                "from_input": 42,
+                "input_list": [
+                  [
+                    1,
+                    2,
+                    3
+                  ],
+                  "literal"
+                ],
+                "missing_field": null,
+                "missing_step": null,
+                "missing_input": null,
+                "partial_string": "prefix {{input.label}} suffix",
+                "item_outside_loop": null,
+                "item_field_outside_loop": null,
+                "number": 7,
+                "flag": true,
+                "nothing": null
+              }
+            ]
+          },
+          "kwargs_as_options": {
+            "activity": "golden_echo_activity",
+            "args": [
+              "alpha"
+            ]
+          },
+          "args_dict_quirk": {
+            "activity": "golden_echo_activity",
+            "args": [
+              "only_key"
+            ]
+          },
+          "bad_kwarg": null,
+          "two_args": null,
+          "retries_exhausted": null,
+          "non_retryable": null,
+          "missing_activity_key": null,
+          "mystery": null,
+          "after_all": null
+        }
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "plain",
+          "with_options",
+          "templates",
+          "kwargs_as_options",
+          "args_dict_quirk",
+          "bad_kwarg",
+          "two_args",
+          "retries_exhausted",
+          "non_retryable",
+          "missing_activity_key",
+          "mystery",
+          "after_all"
+        ],
+        "results": {
+          "plain": {
+            "activity": "golden_echo_activity",
+            "args": []
+          },
+          "with_options": {
+            "activity": "golden_echo_activity",
+            "args": [
+              "alpha"
+            ]
+          },
+          "templates": {
+            "activity": "golden_echo_activity",
+            "args": [
+              {
+                "from_results": [
+                  "alpha"
+                ],
+                "whole_result": {
+                  "activity": "golden_echo_activity",
+                  "args": []
+                },
+                "from_input": 42,
+                "input_list": [
+                  [
+                    1,
+                    2,
+                    3
+                  ],
+                  "literal"
+                ],
+                "missing_field": null,
+                "missing_step": null,
+                "missing_input": null,
+                "partial_string": "prefix {{input.label}} suffix",
+                "item_outside_loop": null,
+                "item_field_outside_loop": null,
+                "number": 7,
+                "flag": true,
+                "nothing": null
+              }
+            ]
+          },
+          "kwargs_as_options": {
+            "activity": "golden_echo_activity",
+            "args": [
+              "alpha"
+            ]
+          },
+          "args_dict_quirk": {
+            "activity": "golden_echo_activity",
+            "args": [
+              "only_key"
+            ]
+          },
+          "bad_kwarg": null,
+          "two_args": null,
+          "retries_exhausted": null,
+          "non_retryable": null,
+          "missing_activity_key": null,
+          "mystery": null,
+          "after_all": null
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  Pause and approval steps: resumed by the resume_step update (answer pinned) and by the signal alias, with and
+  without timeout (timer started, then cancelled on resume), expiring ({"action": "expired"}), a signal sent before
+  the step is reached (consumed when it is), `signal_name` ignored, updates rejected by the validator (a step that
+  is not waiting, one that already expired), and the query while paused (current_step always None).
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+input: {label: alpha}
+metadata: {source: golden}
+process:
+  steps:
+    - id: before
+      type: activity
+      activity: golden_value_activity
+      args: [before]
+    - id: pause_update
+      type: pause
+      signal_name: resume_custom_ignored
+    - id: approval_timeout_update
+      type: approval
+      timeout: 3600
+    - id: pause_expires
+      type: pause
+      timeout: 120
+    - id: pause_signal
+      type: pause
+    - id: approval_signal_timeout
+      type: approval
+      timeout: 600
+    - id: pause_signalled_early
+      type: pause
+      timeout: 900
+    - id: after
+      type: activity
+      activity: golden_gate_activity
+      args: [{gate: g_after, note: "{{results.pause_update.note}}"}]
+script:
+  - probe_waiting: [pause_update]
+  - query: while_pause_update_waits
+  - update: {step_id: not_a_step, data: {note: never}}
+  - update: {step_id: pause_update, data: {note: resumed by update, approved: true}}
+  - probe_waiting: [approval_timeout_update]
+  - update: {step_id: approval_timeout_update, data: {decision: approve}}
+  - probe_waiting: [pause_expires]
+  - skip_seconds: 300
+  - probe_waiting: [pause_signal]
+  - update: {step_id: pause_expires, data: {note: too late}}
+  - signal: {step_id: pause_signalled_early, data: {note: sent before the step was reached}}
+  - signal: {step_id: pause_signal, data: {note: resumed by signal}}
+  - probe_waiting: [approval_signal_timeout]
+  - signal: {step_id: approval_signal_timeout, data: {decision: approve by signal}}
+  - wait_completed: pause_signalled_early
+  - query: after_signals
+  - release: g_after

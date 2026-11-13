@@ -1,0 +1,595 @@
+{
+  "case": "for_each.ConditionalProcessWorkflow",
+  "workflow_id": "golden-for_each-conditional",
+  "uuid4_draws": 16,
+  "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_echo_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "whole": {
+            "name": "one",
+            "size": 1
+          },
+          "name": "one",
+          "missing": null,
+          "input": "lonely"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 20.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 2,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_echo_activity",
+      "activity_id": "2",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "whole": {
+            "name": "two",
+            "size": 2
+          },
+          "name": "two",
+          "missing": null,
+          "input": "lonely"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 20.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 2,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "3",
+      "task_queue": "process-engine-golden",
+      "input": [
+        [
+          {
+            "whole": {
+              "name": "one",
+              "size": 1
+            },
+            "name": "one",
+            "missing": null,
+            "input": "lonely"
+          }
+        ]
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "4",
+      "task_queue": "process-engine-golden",
+      "input": [
+        [
+          {
+            "whole": {
+              "name": "two",
+              "size": 2
+            },
+            "name": "two",
+            "missing": null,
+            "input": "lonely"
+          }
+        ]
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#4>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "thing": "one"
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_ABANDON",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#5>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "thing": "two"
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_ABANDON",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#7>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "name": "one",
+          "size": 1
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 300.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#8>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "name": "two",
+          "size": 2
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 300.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "5",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "lonely"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "6",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "x"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "7",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "y"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_maybe_fail_activity",
+      "activity_id": "8",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "name": "ok-1"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 1,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_maybe_fail_activity",
+      "activity_id": "9",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "name": "bad",
+          "fail": true
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 1,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_maybe_fail_activity",
+      "activity_id": "10",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "name": "ok-2"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 1,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "complete_workflow",
+      "result": [
+        {
+          "over_activity": [
+            {
+              "activity": "golden_echo_activity",
+              "args": [
+                {
+                  "whole": {
+                    "name": "one",
+                    "size": 1
+                  },
+                  "name": "one",
+                  "missing": null,
+                  "input": "lonely"
+                }
+              ]
+            },
+            {
+              "activity": "golden_echo_activity",
+              "args": [
+                {
+                  "whole": {
+                    "name": "two",
+                    "size": 2
+                  },
+                  "name": "two",
+                  "missing": null,
+                  "input": "lonely"
+                }
+              ]
+            }
+          ],
+          "over_results": [
+            [
+              {
+                "whole": {
+                  "name": "one",
+                  "size": 1
+                },
+                "name": "one",
+                "missing": null,
+                "input": "lonely"
+              }
+            ],
+            [
+              {
+                "whole": {
+                  "name": "two",
+                  "size": 2
+                },
+                "name": "two",
+                "missing": null,
+                "input": "lonely"
+              }
+            ]
+          ],
+          "over_workflow": [
+            {
+              "child_workflow_id": "GoldenChildWorkflow_<uuid4#4>"
+            },
+            {
+              "child_workflow_id": "GoldenChildWorkflow_<uuid4#5>"
+            }
+          ],
+          "over_workflow_waiting": [
+            {
+              "child": "GoldenChildWorkflow",
+              "received": {
+                "name": "one",
+                "size": 1
+              }
+            },
+            {
+              "child": "GoldenChildWorkflow",
+              "received": {
+                "name": "two",
+                "size": 2
+              }
+            }
+          ],
+          "scalar_items": [
+            "lonely"
+          ],
+          "none_items": [],
+          "empty_items": [],
+          "literal_items": [
+            "x",
+            "y"
+          ],
+          "unsupported_pause": [
+            null,
+            null
+          ],
+          "unsupported_nested": [
+            null,
+            null
+          ],
+          "no_inner_step": [],
+          "inner_on_error": [
+            {
+              "ok": {
+                "name": "ok-1"
+              }
+            },
+            null,
+            {
+              "ok": {
+                "name": "ok-2"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "over_activity",
+          "over_results",
+          "over_workflow",
+          "over_workflow_waiting",
+          "scalar_items",
+          "none_items",
+          "empty_items",
+          "literal_items",
+          "unsupported_pause",
+          "unsupported_nested",
+          "no_inner_step",
+          "inner_on_error"
+        ],
+        "results": {
+          "over_activity": [
+            {
+              "activity": "golden_echo_activity",
+              "args": [
+                {
+                  "whole": {
+                    "name": "one",
+                    "size": 1
+                  },
+                  "name": "one",
+                  "missing": null,
+                  "input": "lonely"
+                }
+              ]
+            },
+            {
+              "activity": "golden_echo_activity",
+              "args": [
+                {
+                  "whole": {
+                    "name": "two",
+                    "size": 2
+                  },
+                  "name": "two",
+                  "missing": null,
+                  "input": "lonely"
+                }
+              ]
+            }
+          ],
+          "over_results": [
+            [
+              {
+                "whole": {
+                  "name": "one",
+                  "size": 1
+                },
+                "name": "one",
+                "missing": null,
+                "input": "lonely"
+              }
+            ],
+            [
+              {
+                "whole": {
+                  "name": "two",
+                  "size": 2
+                },
+                "name": "two",
+                "missing": null,
+                "input": "lonely"
+              }
+            ]
+          ],
+          "over_workflow": [
+            {
+              "child_workflow_id": "GoldenChildWorkflow_<uuid4#4>"
+            },
+            {
+              "child_workflow_id": "GoldenChildWorkflow_<uuid4#5>"
+            }
+          ],
+          "over_workflow_waiting": [
+            {
+              "child": "GoldenChildWorkflow",
+              "received": {
+                "name": "one",
+                "size": 1
+              }
+            },
+            {
+              "child": "GoldenChildWorkflow",
+              "received": {
+                "name": "two",
+                "size": 2
+              }
+            }
+          ],
+          "scalar_items": [
+            "lonely"
+          ],
+          "none_items": [],
+          "empty_items": [],
+          "literal_items": [
+            "x",
+            "y"
+          ],
+          "unsupported_pause": [
+            null,
+            null
+          ],
+          "unsupported_nested": [
+            null,
+            null
+          ],
+          "no_inner_step": [],
+          "inner_on_error": [
+            {
+              "ok": {
+                "name": "ok-1"
+              }
+            },
+            null,
+            {
+              "ok": {
+                "name": "ok-2"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: A null process definition fails the workflow task (ValueError in Linear), not the run.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
+input: {}
+metadata: {}
+outcome: task_failed
+process: null

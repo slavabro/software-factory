@@ -1,0 +1,51 @@
+{
+  "case": "fatal_child.ConditionalProcessWorkflow",
+  "workflow_id": "golden-fatal_child-conditional",
+  "uuid4_draws": 2,
+  "commands": [
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenFailingChildWorkflow",
+      "workflow_id": "GoldenFailingChildWorkflow_<uuid4#2>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "why": "golden"
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "fail_workflow",
+      "failure": {
+        "message": "Child Workflow execution failed",
+        "info": "child_workflow_execution_failure_info",
+        "cause": {
+          "message": "golden child failed",
+          "info": "application_failure_info",
+          "type": "GoldenChildError",
+          "non_retryable": true
+        }
+      }
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [],
+        "results": {}
+      }
+    }
+  ]
+}

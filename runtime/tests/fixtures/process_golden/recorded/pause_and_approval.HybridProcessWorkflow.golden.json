@@ -1,0 +1,264 @@
+{
+  "case": "pause_and_approval.HybridProcessWorkflow",
+  "workflow_id": "golden-pause_and_approval-hybrid",
+  "uuid4_draws": 8,
+  "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "before"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "start_timer",
+      "timer_id": "1",
+      "start_to_fire_timeout": 3600.0,
+      "summary": null
+    },
+    {
+      "command": "cancel_timer",
+      "timer_id": "1"
+    },
+    {
+      "command": "start_timer",
+      "timer_id": "2",
+      "start_to_fire_timeout": 120.0,
+      "summary": null
+    },
+    {
+      "command": "start_timer",
+      "timer_id": "3",
+      "start_to_fire_timeout": 600.0,
+      "summary": null
+    },
+    {
+      "command": "cancel_timer",
+      "timer_id": "3"
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_gate_activity",
+      "activity_id": "2",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "gate": "g_after",
+          "note": "resumed by update"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "complete_workflow",
+      "result": [
+        {
+          "before": "before",
+          "pause_update": {
+            "note": "resumed by update",
+            "approved": true
+          },
+          "approval_timeout_update": {
+            "decision": "approve"
+          },
+          "pause_expires": {
+            "action": "expired",
+            "timeout_seconds": 120
+          },
+          "pause_signal": {
+            "note": "resumed by signal"
+          },
+          "approval_signal_timeout": {
+            "decision": "approve by signal"
+          },
+          "pause_signalled_early": {
+            "note": "sent before the step was reached"
+          },
+          "after": {
+            "gate": "g_after",
+            "params": {
+              "gate": "g_after",
+              "note": "resumed by update"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "query": "while_pause_update_waits",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "before"
+        ],
+        "results": {
+          "before": "before"
+        }
+      }
+    },
+    {
+      "update": "not_a_step",
+      "rejected": {
+        "type": "ValueError",
+        "message": "Step 'not_a_step' is not waiting to be resumed (waiting steps: ['pause_update'])"
+      }
+    },
+    {
+      "update": "pause_update",
+      "answer": {
+        "step_id": "pause_update",
+        "status": "resumed",
+        "result": {
+          "note": "resumed by update",
+          "approved": true
+        },
+        "completed_steps": [
+          "before",
+          "pause_update"
+        ]
+      }
+    },
+    {
+      "update": "approval_timeout_update",
+      "answer": {
+        "step_id": "approval_timeout_update",
+        "status": "resumed",
+        "result": {
+          "decision": "approve"
+        },
+        "completed_steps": [
+          "before",
+          "pause_update",
+          "approval_timeout_update"
+        ]
+      }
+    },
+    {
+      "update": "pause_expires",
+      "rejected": {
+        "type": "ValueError",
+        "message": "Step 'pause_expires' is not waiting to be resumed (waiting steps: ['pause_signal'])"
+      }
+    },
+    {
+      "signal": "pause_signalled_early"
+    },
+    {
+      "signal": "pause_signal"
+    },
+    {
+      "signal": "approval_signal_timeout"
+    },
+    {
+      "query": "after_signals",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "before",
+          "pause_update",
+          "approval_timeout_update",
+          "pause_expires",
+          "pause_signal",
+          "approval_signal_timeout",
+          "pause_signalled_early"
+        ],
+        "results": {
+          "before": "before",
+          "pause_update": {
+            "note": "resumed by update",
+            "approved": true
+          },
+          "approval_timeout_update": {
+            "decision": "approve"
+          },
+          "pause_expires": {
+            "action": "expired",
+            "timeout_seconds": 120
+          },
+          "pause_signal": {
+            "note": "resumed by signal"
+          },
+          "approval_signal_timeout": {
+            "decision": "approve by signal"
+          },
+          "pause_signalled_early": {
+            "note": "sent before the step was reached"
+          }
+        }
+      }
+    },
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "before",
+          "pause_update",
+          "approval_timeout_update",
+          "pause_expires",
+          "pause_signal",
+          "approval_signal_timeout",
+          "pause_signalled_early",
+          "after"
+        ],
+        "results": {
+          "before": "before",
+          "pause_update": {
+            "note": "resumed by update",
+            "approved": true
+          },
+          "approval_timeout_update": {
+            "decision": "approve"
+          },
+          "pause_expires": {
+            "action": "expired",
+            "timeout_seconds": 120
+          },
+          "pause_signal": {
+            "note": "resumed by signal"
+          },
+          "approval_signal_timeout": {
+            "decision": "approve by signal"
+          },
+          "pause_signalled_early": {
+            "note": "sent before the step was reached"
+          },
+          "after": {
+            "gate": "g_after",
+            "params": {
+              "gate": "g_after",
+              "note": "resumed by update"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

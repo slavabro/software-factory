@@ -1,0 +1,345 @@
+{
+  "case": "parallel_all_types.ParallelProcessWorkflow",
+  "workflow_id": "golden-parallel_all_types-parallel",
+  "uuid4_draws": 9,
+  "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_gate_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "gate": "g_false_condition"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_gate_activity",
+      "activity_id": "2",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "gate": "g_activity",
+          "label": "alpha"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 30.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 2,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#6>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "gate": "g_child"
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 600.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_gate_activity",
+      "activity_id": "3",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "gate": "g_loop_1"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "start_timer",
+      "timer_id": "1",
+      "start_to_fire_timeout": 600.0,
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_gate_activity",
+      "activity_id": "4",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "gate": "g_loop_2"
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "cancel_timer",
+      "timer_id": "1"
+    },
+    {
+      "command": "complete_workflow",
+      "result": [
+        {
+          "unknown": null,
+          "none_loop": [],
+          "gated_activity": {
+            "gate": "g_activity",
+            "params": {
+              "gate": "g_activity",
+              "label": "alpha"
+            }
+          },
+          "approval": {
+            "decision": "approve"
+          },
+          "false_condition": {
+            "gate": "g_false_condition",
+            "params": {
+              "gate": "g_false_condition"
+            }
+          },
+          "loop": [
+            {
+              "gate": "g_loop_1",
+              "params": {
+                "gate": "g_loop_1"
+              }
+            },
+            {
+              "gate": "g_loop_2",
+              "params": {
+                "gate": "g_loop_2"
+              }
+            }
+          ],
+          "child": {
+            "child": "GoldenChildWorkflow",
+            "received": {
+              "gate": "g_child"
+            }
+          },
+          "pause_timeout": {
+            "note": "last"
+          }
+        }
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "query": "started",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "unknown",
+          "none_loop"
+        ],
+        "results": {
+          "unknown": null,
+          "none_loop": []
+        }
+      }
+    },
+    {
+      "update": "approval",
+      "answer": {
+        "step_id": "approval",
+        "status": "resumed",
+        "result": {
+          "decision": "approve"
+        },
+        "completed_steps": [
+          "unknown",
+          "none_loop",
+          "gated_activity",
+          "approval"
+        ]
+      }
+    },
+    {
+      "query": "before_last_pause",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "unknown",
+          "none_loop",
+          "gated_activity",
+          "approval",
+          "false_condition",
+          "loop",
+          "child"
+        ],
+        "results": {
+          "unknown": null,
+          "none_loop": [],
+          "gated_activity": {
+            "gate": "g_activity",
+            "params": {
+              "gate": "g_activity",
+              "label": "alpha"
+            }
+          },
+          "approval": {
+            "decision": "approve"
+          },
+          "false_condition": {
+            "gate": "g_false_condition",
+            "params": {
+              "gate": "g_false_condition"
+            }
+          },
+          "loop": [
+            {
+              "gate": "g_loop_1",
+              "params": {
+                "gate": "g_loop_1"
+              }
+            },
+            {
+              "gate": "g_loop_2",
+              "params": {
+                "gate": "g_loop_2"
+              }
+            }
+          ],
+          "child": {
+            "child": "GoldenChildWorkflow",
+            "received": {
+              "gate": "g_child"
+            }
+          }
+        }
+      }
+    },
+    {
+      "update": "pause_timeout",
+      "answer": {
+        "step_id": "pause_timeout",
+        "status": "resumed",
+        "result": {
+          "note": "last"
+        },
+        "completed_steps": [
+          "unknown",
+          "none_loop",
+          "gated_activity",
+          "approval",
+          "false_condition",
+          "loop",
+          "child",
+          "pause_timeout"
+        ]
+      }
+    },
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "unknown",
+          "none_loop",
+          "gated_activity",
+          "approval",
+          "false_condition",
+          "loop",
+          "child",
+          "pause_timeout"
+        ],
+        "results": {
+          "unknown": null,
+          "none_loop": [],
+          "gated_activity": {
+            "gate": "g_activity",
+            "params": {
+              "gate": "g_activity",
+              "label": "alpha"
+            }
+          },
+          "approval": {
+            "decision": "approve"
+          },
+          "false_condition": {
+            "gate": "g_false_condition",
+            "params": {
+              "gate": "g_false_condition"
+            }
+          },
+          "loop": [
+            {
+              "gate": "g_loop_1",
+              "params": {
+                "gate": "g_loop_1"
+              }
+            },
+            {
+              "gate": "g_loop_2",
+              "params": {
+                "gate": "g_loop_2"
+              }
+            }
+          ],
+          "child": {
+            "child": "GoldenChildWorkflow",
+            "received": {
+              "gate": "g_child"
+            }
+          },
+          "pause_timeout": {
+            "note": "last"
+          }
+        }
+      }
+    }
+  ]
+}
