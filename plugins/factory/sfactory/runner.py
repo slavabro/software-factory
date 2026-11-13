@@ -34,6 +34,8 @@ REPORT_REL = ".factory/report.md"
 
 _NOT_CREATED = -1000
 _NOT_OPTED_IN = -1001
+_INVALID_CONFIG = -1002
+_SETUP_FAILED = -1003
 _TIMED_OUT = 124
 
 
@@ -191,8 +193,8 @@ def run(cfg: Config, capability: str, dry_run: bool = False, keep: bool = False)
             return 0
         if code == _TIMED_OUT:
             print(f"factory: {capability} run timed out — log {log_path}")
-        _collect_report(worktree, log_path, report)
-        _deliver(cfg, report, worktree, env, log_path)
+        collect_report(worktree, log_path, report)
+        deliver(cfg, report, worktree, env, log_path)
         print(f"factory: {capability} run finished (agent exit {code}) — log {log_path}")
         return code
     finally:
@@ -207,7 +209,7 @@ def agent_output_path(log_path: Path) -> Path:
     return log_path.with_suffix(".agent.md")
 
 
-def _collect_report(worktree: Path, log_path: Path, report: Path) -> None:
+def collect_report(worktree: Path, log_path: Path, report: Path) -> None:
     """The agent's digest file, else its final output (`claude -p` prints only its last message)."""
     written, said = worktree / REPORT_REL, agent_output_path(log_path)
     if written.is_file() and written.read_text().strip():
@@ -216,7 +218,7 @@ def _collect_report(worktree: Path, log_path: Path, report: Path) -> None:
         shutil.copyfile(said, report)
 
 
-def _ignore_report_dir(worktree: Path) -> None:
+def ignore_report_dir(worktree: Path) -> None:
     exclude = Path(_git(["rev-parse", "--path-format=absolute", "--git-path", "info/exclude"], worktree).strip())
     exclude.parent.mkdir(parents=True, exist_ok=True)
     line = "/" + REPORT_REL.split("/")[0] + "/"
@@ -226,7 +228,7 @@ def _ignore_report_dir(worktree: Path) -> None:
     (worktree / REPORT_REL).parent.mkdir(parents=True, exist_ok=True)
 
 
-def _deliver(cfg: Config, report: Path, worktree: Path, env: dict, log_path: Path) -> None:
+def deliver(cfg: Config, report: Path, worktree: Path, env: dict, log_path: Path) -> None:
     if not report.is_file():
         print(f"factory: the run wrote no report ({report})")
         return
@@ -237,36 +239,58 @@ def _deliver(cfg: Config, report: Path, worktree: Path, env: dict, log_path: Pat
             _sh(wcfg.report_with.replace("{file}", shlex.quote(str(report))), cfg.root, env, log, timeout=120)
 
 
-def _prepare_and_run(cfg: Config, capability: str, worktree: Path, branch: str, env: dict, log, log_path: Path) -> int:
-    """Fresh worktree off the default branch, its config and setup, then the agent. Returns the agent's exit code."""
-    if _sh(["git", "fetch", "--quiet", "origin", cfg.default_branch], cfg.root, env, log) or _sh(
+def prepare_worktree(cfg: Config, worktree: Path, branch: str, env: dict, log) -> tuple[int, Config | None]:
+    """Fresh worktree off the default branch (an existing one is reused), its config, then its setup.
+    Returns (0, the worktree's config) or (a failure code, None)."""
+    if worktree.is_dir():
+        log.write(f"reusing worktree {worktree}\n")
+    elif _sh(["git", "fetch", "--quiet", "origin", cfg.default_branch], cfg.root, env, log) or _sh(
         ["git", "worktree", "add", "--quiet", "-b", branch, str(worktree), f"origin/{cfg.default_branch}"], cfg.root, env, log
     ):
-        print(f"factory: could not create the run worktree — see {log_path}")
-        return _NOT_CREATED
+        return _NOT_CREATED, None
     # The run follows the default branch's config, not a possibly stale main checkout.
     if not (worktree / CONFIG_NAME).is_file():
         log.write(f"no {CONFIG_NAME} on origin/{cfg.default_branch}: repo not opted in\n")
-        print(f"factory: {cfg.name} has no {CONFIG_NAME} on {cfg.default_branch} — not opted in; nothing to do")
-        return _NOT_OPTED_IN
+        return _NOT_OPTED_IN, None
     try:
         wcfg = config_mod.load(worktree)
     except config_mod.ConfigError as exc:
         log.write(f"invalid config: {exc}\n")
-        print(f"factory: {exc}")
-        return 1
-    _ignore_report_dir(worktree)
+        return _INVALID_CONFIG, None
+    ignore_report_dir(worktree)
     for cmd in wcfg.worktree_setup:
         if _sh(cmd, worktree, env, log, timeout=1800):
-            print(f"factory: worktree setup `{cmd}` failed — see {log_path}")
-            return 1
+            log.write(f"worktree setup `{cmd}` failed\n")
+            return _SETUP_FAILED, None
+    return 0, wcfg
+
+
+def agent_invocation(wcfg: Config, prompt: str, worktree: Path, env: dict) -> tuple[list[str], dict] | None:
+    """The agent's argv and environment for a session in `worktree`, or None when the agent CLI isn't on PATH."""
     run_env = dict(env)
     if wcfg.worktree_path:
         run_env["PATH"] = os.pathsep.join([str(worktree / p) for p in wcfg.worktree_path] + [env.get("PATH", "")])
-    argv = agent_argv(wcfg, PROMPTS[capability])
-    if not shutil.which(argv[0], path=run_env.get("PATH")):
-        print(f"factory: agent command {argv[0]!r} not found on PATH — see {log_path}")
+    argv = agent_argv(wcfg, prompt)
+    return (argv, run_env) if shutil.which(argv[0], path=run_env.get("PATH")) else None
+
+
+def _prepare_and_run(cfg: Config, capability: str, worktree: Path, branch: str, env: dict, log, log_path: Path) -> int:
+    """Fresh worktree off the default branch, its config and setup, then the agent. Returns the agent's exit code."""
+    code, wcfg = prepare_worktree(cfg, worktree, branch, env, log)
+    if code == _NOT_CREATED:
+        print(f"factory: could not create the run worktree — see {log_path}")
+        return code
+    if code == _NOT_OPTED_IN:
+        print(f"factory: {cfg.name} has no {CONFIG_NAME} on {cfg.default_branch} — not opted in; nothing to do")
+        return code
+    if code or wcfg is None:
+        print(f"factory: the run could not start ({'invalid config' if code == _INVALID_CONFIG else 'worktree setup failed'}) — see {log_path}")
         return 1
+    invocation = agent_invocation(wcfg, PROMPTS[capability], worktree, env)
+    if invocation is None:
+        print(f"factory: agent command {agent_argv(wcfg, '')[0]!r} not found on PATH — see {log_path}")
+        return 1
+    argv, run_env = invocation
     log.write(f"\n$ {shlex.join(argv)}  (output → {agent_output_path(log_path)})\n")
     log.flush()
     with open(agent_output_path(log_path), "w") as out:

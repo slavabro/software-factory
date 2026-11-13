@@ -46,7 +46,13 @@ risky = []                    # package-name globs that become tasks, never PRs 
 ignore = []                   # package-name globs never touched
 install = []                  # install the changed manifests in the worktree (pip install -r …, npm ci)
 deprecation_check = []        # commands whose output shows deprecation warnings (tests with warnings on, a build)
-max_prs = 3                   # per run
+max_prs = 3                   # per run; the upgrade capability is also the engine's team `upgrade`
+
+[teams.qa]                    # a standing team the engine runs (docs/designs/engine.md); one table per team
+prompt = "/factory:qa"        # required: what the agent session is asked to do
+schedule = "0 2 * * *"        # cron, UTC; "off" (default) = events and `factory engine run-now` only
+budget_minutes = 90           # one run's agent time, across retries
+wake_on = ["ci_red"]          # events that wake it: ci_red, deploy_failed, incident, merged
 ```
 
 ## Safety model for unattended runs

@@ -33,7 +33,7 @@ engine/                        its own pyproject + lockfile: factory-runtime (..
 ├── engine/models.py           every workflow / activity / message input and output (Pydantic, one per call)
 ├── engine/workflows/team.py   TeamWorkflow
 ├── engine/workflows/tick.py   ScheduleTick
-├── engine/activities/         repo.py, agent.py, deliver.py, notebook.py, budget.py, wake.py, schedule.py
+├── engine/activities/         repo.py (resolve, prepare, deliver, clean), agent.py (the session), teams.py (budget, outcome, wake)
 ├── engine/schedules.py        desired schedules from each repo's .factory.toml → create / update / delete
 ├── engine/cli.py              signal, run-now, pause, resume, status (what `factory engine …` calls)
 ├── engine/worker.py           the one worker: task queue `factory`, Worker Versioning
@@ -78,7 +78,7 @@ per key, which is what makes "one run at a time per team per repo" hold.
 | wait | durable `workflow.sleep` until the window reopens | — | a timer; no worker held |
 | prepare | `prepare_worktree` | 5 min, 3 attempts | path and branch come from the run (below); an existing worktree is reused, and a stale agent left in it is killed first |
 | work | `run_agent_session` | start-to-close = team budget (default 90 min), schedule-to-close = budget + 30 min, heartbeat every 30 s, heartbeat timeout 3 min, 2 attempts, cancellation type `WAIT_CANCELLATION_COMPLETED`; non-retryable: `AgentRefused`, `NothingToDo` | heartbeat details carry the session id and log offset; one agent per worktree (lock + pidfile) |
-| deliver | `open_or_update_pr` | 5 min, 5 attempts, backoff | finds the open PR for the run's branch before creating one (closed and merged PRs are ignored); a task is filed only after an `exists` check |
+| deliver | `deliver_report` | 5 min, 5 attempts, backoff | collects the run's digest and sends it (`[report] with`); the PRs themselves are opened by the agent's skill through the repo's own landing, as in any run, on branches under the run's branch name |
 | record | `append_notebook` | 1 min, 5 attempts | keyed by `activity_idempotency_key()`; a repeat write is skipped |
 | clean | `remove_worktree` | 5 min, 3 attempts | runs in `finally` (after a cancel too); a missing worktree is success |
 
@@ -114,11 +114,13 @@ workflow ID (unique per scheduled time, so a retried tick is deduped).
 
 ## 4. Schedules and pausing
 
-- **Declared in each repo's `.factory.toml`** (`[teams.qa] schedule = "0 2 * * *"`, UTC). `engine.schedules`
+- **Declared in each repo's `.factory.toml`** (`[teams.qa] schedule = "0 2 * * *"`, UTC; the upgrade team's
+  schedule is `[upgrade] schedule`), as committed on its default branch. `engine.schedules`
   reconciles one Temporal Schedule per (repo, team), ID `schedule/<repo>/<team>`: created, updated through
   `handle.update()`, or deleted to match the config, whenever `factory engine upgrade` runs or the config changes.
 - **Overlap policy `SKIP`** on ticks (a tick takes a second; the team workflow already serialises the runs).
-- **Catchup window = one interval:** a laptop that slept through 02:00 runs once when it wakes, not a backlog.
+- **Catchup window = one day:** a laptop that slept through 02:00 runs when it wakes; a run missed by more than a
+  day is dropped, not replayed.
 - **Jitter 5 minutes,** so teams don't start on the same second.
 - **One owner for "paused": the team's Schedule.** Its pause carries a note with the reason. New schedules start
   paused until the team has run once by hand with a good result; three failed runs in a row pause it (the run's last
@@ -129,8 +131,7 @@ workflow ID (unique per scheduled time, so a retried tick is deduped).
 
 `factory engine signal <reason> --repo R [--team T] --event-id ID [--details JSON]` signal-with-starts the matching
 team workflows. Callers: the tower (main's CI red, a failed deploy, a merged PR it watched), product CI hooks later,
-and the support desk (F-24). Without `--team`, the repo's `[events]` table in `.factory.toml` names which teams
-wake for which reason.
+and the support desk (F-24). Without `--team`, every team whose `wake_on` in `.factory.toml` lists the reason wakes.
 
 ## 6. Deploying new engine code: Worker Versioning
 
