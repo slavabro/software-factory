@@ -40,6 +40,8 @@ From FamilyOffice `common/temporal/`, about 450 lines:
 
 ### Slice R2: the process engine
 
+Design, reviewed: [process-engine.md](process-engine.md).
+
 From FamilyOffice `workflows/interpreters/` (YAML processes: linear, parallel, conditional, hybrid, `for_each`,
 decision, pause and approval steps) and `workflows/schedulers/` (schedules declared in YAML). Their ties to
 FamilyOffice are config, decision models, YAML helpers and the LLM on/off control. Each becomes an argument or a
