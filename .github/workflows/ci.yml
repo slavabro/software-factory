@@ -33,5 +33,11 @@ jobs:
       - run: python3 -m pip install ./runtime mypy==2.4.1
       - working-directory: runtime
         run: python3 -m mypy factory_runtime --strict
-      - working-directory: runtime
-        run: python3 -m unittest discover -s tests -t . -v
+      # Test the installed package, not the source tree: copy the tests out so `factory_runtime` can only come
+      # from site-packages (a packaging slip then fails here, not in a product).
+      - name: Tests against the installed package
+        run: |
+          cp -R runtime/tests "$RUNNER_TEMP/tests"
+          cd "$RUNNER_TEMP"
+          python3 -c "import factory_runtime, pathlib; p = pathlib.Path(factory_runtime.__file__).parent; assert 'site-packages' in str(p), p; assert (p / 'py.typed').exists()"
+          python3 -m unittest discover -s tests -t . -v

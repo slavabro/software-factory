@@ -15,7 +15,8 @@ def _failure_chain(failure: Failure | None) -> str:
 
 
 async def get_run_failure(client: Client, workflow_id: str, run_id: str | None, max_chars: int) -> str | None:
-    """A one-line reason a closed run did not complete, or None when it did (or none is recorded)."""
+    """A one-line reason a closed run did not complete (failed, timed out, terminated, cancelled), or None when it
+    completed or is still running."""
     handle = client.get_workflow_handle(workflow_id, run_id=run_id)
     async for event in handle.fetch_history_events(event_filter_type=WorkflowHistoryEventFilterType.CLOSE_EVENT):
         if event.HasField("workflow_execution_failed_event_attributes"):
@@ -26,4 +27,6 @@ async def get_run_failure(client: Client, workflow_id: str, run_id: str | None, 
         if event.HasField("workflow_execution_terminated_event_attributes"):
             reason = event.workflow_execution_terminated_event_attributes.reason
             return f"The run was terminated: {reason}"[:max_chars] if reason else "The run was terminated."
+        if event.HasField("workflow_execution_canceled_event_attributes"):
+            return "The run was cancelled."
     return None

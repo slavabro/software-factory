@@ -68,3 +68,10 @@ class Inbox:
     @workflow.query
     def seen(self) -> list[str]:
         return self.events
+
+
+@workflow.defn
+class Waiting:
+    @workflow.run
+    async def run(self) -> None:
+        await workflow.wait_condition(lambda: False)

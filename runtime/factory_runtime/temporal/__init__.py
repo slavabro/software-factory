@@ -2,7 +2,7 @@
 history, signal-with-start. Nothing here reads a product's config."""
 
 from factory_runtime.temporal.activity import DATA_SHAPE_ERRORS, activity_idempotency_key
-from factory_runtime.temporal.client import get_client, reset_clients
+from factory_runtime.temporal.client import cached_client, get_client, reset_clients, set_client
 from factory_runtime.temporal.converter import ZLIB_ENCODING, CompressionCodec, data_converter
 from factory_runtime.temporal.run_history import get_run_failure
 from factory_runtime.temporal.sandbox import BASE_PASSTHROUGH_MODULES, STRICT_IMPORT_POLICY, build_workflow_runner
@@ -18,9 +18,11 @@ __all__ = [
     "TemporalSettings",
     "activity_idempotency_key",
     "build_workflow_runner",
+    "cached_client",
     "data_converter",
     "get_client",
     "get_run_failure",
     "reset_clients",
+    "set_client",
     "signal_with_start",
 ]

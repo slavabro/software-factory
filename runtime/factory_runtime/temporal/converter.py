@@ -62,9 +62,14 @@ class CompressionCodec(PayloadCodec):
         ]
 
 
-@lru_cache(maxsize=None)
 def data_converter(
     min_bytes: int = DEFAULT_COMPRESS_MIN_BYTES, warn_bytes: int = DEFAULT_WARN_BYTES
 ) -> DataConverter:
-    """The converter every `Client.connect` and `WorkflowEnvironment` passes (one object per limits pair)."""
+    """The converter every `Client.connect` and `WorkflowEnvironment` passes: one object per limits pair, however
+    the limits are spelled."""
+    return _converter(int(min_bytes), int(warn_bytes))
+
+
+@lru_cache(maxsize=None)
+def _converter(min_bytes: int, warn_bytes: int) -> DataConverter:
     return dataclasses.replace(pydantic_data_converter, payload_codec=CompressionCodec(min_bytes, warn_bytes))
