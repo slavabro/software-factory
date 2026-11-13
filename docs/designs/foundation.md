@@ -59,44 +59,9 @@ that owns it:
 
 ## 2. The factory engine (F-50)
 
-**Separate programs.** The factory and each product are separate programs, each with its own Temporal: its own
-server, database, UI, workers and history. They share only code (`runtime/`, installed as a package), never a running
-server. Nothing the factory does can stop, slow or fill a product's Temporal, and the reverse.
-
-**Where it runs.** On the home machine (the F-06 setting):
-- **The server** is its own Docker Compose project, `software-factory`: a Temporal server, its own Postgres (a named
-  volume, so history survives restarts) and the Temporal UI, on its own ports (7243 for the server, 8243 for the UI;
-  settings). It is a Docker project, not `temporal server start-dev`, because a product's dev scripts may stop every
-  `start-dev` process on the machine (FamilyOffice's `start_all.sh` does), and a dev server keeps no history.
-- **The worker** runs on the host, not in a container, because its activities drive the laptop's own tools: git
-  worktrees, agent sessions, `gh`. It is kept up by launchd (or a systemd user service on Linux), the same way
-  `factory schedule` installs things today.
-
-**Code.** `engine/` in this repo (D-5): its own `pyproject.toml` depending on `runtime/` and `temporalio`,
-and its own CI job. `factory engine install` creates its virtualenv under `~/.local/share/software-factory/`, then
-installs the server and worker services. `factory engine status` reports server, worker, schedules and recent runs.
-The standard-library CLI only starts and asks; it never imports the engine.
-
-**The first workflow: `TeamRun(team, repo)`**
-
-| Step (activity) | Does |
-|-----------------|------|
-| prepare | a fresh worktree of the repo |
-| work | the team's agent session, through the existing runner (`factory run <capability>`); the AI access policy (F-41) picks subscription or API |
-| deliver | opens a PR through the normal gate, or files a task |
-| record | appends to the team's notebook: what it tried, what was rejected |
-
-The engine works like this:
-- **Timing:** schedules are Temporal Schedules, made from `.factory.toml` (`[teams.<name>] schedule = "…"`).
-- **Events:** `factory engine signal <event> --repo <r>` (CI red on main, deploy failed, incident, PR merged)
-  starts or wakes a team. The tower and CI call it.
-- **One run at a time:** each team has one run per repo, because the workflow ID is `team:<repo>:<team>` and a
-  duplicate is refused while one is running.
-- **Waiting for the principal:** a step that needs their OK pauses on an update until they answer. Later this is
-  the decision queue (F-13).
-
-**Migration.** The upgrade run (F-01) is the first team. It moves from its launchd schedule to a Temporal Schedule,
-and `factory schedule` (the launchd path) is removed in the same change.
+The factory's own always-on program: its own Temporal (server, database, UI, workers), separate from every
+product's; they share only code. Each standing team is a workflow per (repo, team), woken by schedules and events and
+alive only while it has work; new code deploys with Worker Versioning. Full design: [engine.md](engine.md).
 
 ## Build order
 
