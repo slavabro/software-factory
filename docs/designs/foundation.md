@@ -7,9 +7,11 @@ piece moves, its old copy is removed in the same change, so there are never two 
 
 ## 1. The shared runtime package (F-42)
 
-**Repo and package.** `slavabro/factory-runtime`, private, Python package `factory_runtime`, Python 3.12+,
-dependencies `temporalio` and `pydantic` (more only when a slice needs them). It is released by git tag `vX.Y.Z`.
-A product depends on `factory-runtime @ git+https://github.com/slavabro/factory-runtime@vX.Y.Z`, and F-01's upgrade
+**Where and how.** `runtime/` in this repo (D-2), installable package `factory-runtime`, import name `factory_runtime`, Python 3.12+,
+dependencies `temporalio` and `pydantic` (more only when a slice needs them), tested in its own CI job. It ships
+with the factory's version tag.
+A product depends on `factory-runtime @ git+https://github.com/slavabro/software-factory@vX.Y#subdirectory=runtime`
+(one tag for the whole factory, so tools and runtime always match), and F-01's upgrade
 run moves that pin forward like any other dependency.
 
 **No product config inside.** The package never imports a product's settings. Every entry point takes what it
@@ -61,7 +63,7 @@ that owns it:
 - its own ports, so it never shares a process with a product's dev server (a product restart can't touch it);
 - kept up by launchd (or a systemd user service on Linux), the same way `factory schedule` installs things today.
 
-**Code.** `engine/` in this repo (D-5): its own `pyproject.toml` depending on `factory-runtime` and `temporalio`,
+**Code.** `engine/` in this repo (D-5): its own `pyproject.toml` depending on `runtime/` and `temporalio`,
 and its own CI job. `factory engine install` creates its virtualenv under `~/.local/share/software-factory/`, then
 installs the server and worker services. `factory engine status` reports server, worker, schedules and recent runs.
 The standard-library CLI only starts and asks; it never imports the engine.
@@ -89,7 +91,7 @@ and `factory schedule` (the launchd path) is removed in the same change.
 
 ## Build order
 
-1. R1, the Temporal core: create the runtime repo, FamilyOffice binds to it.
+1. R1, the Temporal core: `runtime/` with its CI job and a release tag; FamilyOffice binds to it.
 2. F-50, the engine: server, worker, `TeamRun`, and the upgrade run moved onto it.
 3. R2, the process engine.
 4. F-23, the standing teams, QA and DevOps first.
@@ -98,7 +100,7 @@ F-41 (AI access) runs in parallel from step 2.
 
 ## To settle while building
 
-- **CI access to the private runtime repo.** A product's CI installs the package from a private repo. The plan is a
-  read-only token stored as a repo secret. The check is that a FamilyOffice CI run installs the package.
+- **CI access to the private factory repo.** A product's CI installs `runtime/` from the private factory repo. The plan
+  is a read-only token stored as a repo secret. The check is that a FamilyOffice CI run installs the package.
 - **Ports for the engine's server.** Pick free defaults that don't clash with a product's dev server (FamilyOffice
   uses 7233 and 8233), stored in the engine's config.
