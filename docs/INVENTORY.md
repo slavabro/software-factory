@@ -11,6 +11,7 @@ laptops. It stays in a project when it encodes that project's domain or its live
 | Skills review workflow | one-off session in FamilyOffice | `/factory:skills-review` |
 | Task system (front matter records, generated tables, CI checks) | FamilyOffice `scripts/tasks.py` | `factory task` + `docs/tasks.md` (F-03); FamilyOffice's `scripts/tasks.py` forwards to it |
 | Temporal core (client, data converter, sandbox, activity helpers, run history, signal-with-start, test kit) | FamilyOffice `common/temporal/` | `runtime/factory_runtime/temporal` (F-42 R1, v0.3); FamilyOffice's `common/temporal` binds it to its settings and installs it from the same commit as its action pin |
+| YAML process engine (interpreters, step types, templates, schedules, on-demand runs) | FamilyOffice `workflows/interpreters/`, `workflows/schedulers/`, `yaml_utils`, `process_runs` | `runtime/factory_runtime/process` (F-42 R2, v0.4); FamilyOffice declares its four workflow classes and its decision step on it, and keeps its processes, UI vocabulary and decision domain |
 | Dependency upgrades | by hand, occasionally | `/factory:upgrade` + `factory run/schedule upgrade` (F-01) |
 | Fleet tower skill + `fleet.py` | `~/.claude/skills/fleet/` (untracked, backup in `~/.claude/backups/`) | `home/skills/fleet/`, symlinked back; Telegram rules split into a reference that loads only when Telegram is on |
 | `tower` launcher | `~/.local/bin/tower` (untracked) | `home/bin/tower`, symlinked back |
@@ -21,7 +22,7 @@ laptops. It stays in a project when it encodes that project's domain or its live
 |-------|-------|-----|
 | Domain reviewer skills (architecture, DAL, Temporal, LLM, wealth, frontend, Tufte, testing) | FamilyOffice `.claude/skills/` | Until F-30 splits them: the general practice moves here, the domain facts (and `wealth-management` whole) stay |
 | Task workflow skills (`/design-task` … `/complete-feature`, `/land`, `/review-code`) | FamilyOffice | Bound to its CI jobs and review gate until F-11 |
-| LLM layer, agent jobs, support desk, process engine, notifications | FamilyOffice `common/`, `org/ops/`, `workflows/` | Product code today; the generic core moves to `runtime/` next: the process engine (F-42 R2), then agent jobs, decisions and support with their tasks (F-41, F-13, F-24) |
+| LLM layer, agent jobs, support desk, process engine, notifications | FamilyOffice `common/`, `org/ops/`, `workflows/` | Product code today; the generic core moves to `runtime/` with its task: agent jobs, decisions and support (F-41, F-13, F-24); the process engine has moved (R2) |
 | Prod deployer and smoke checks | FamilyOffice `scripts/` | The generic flow becomes the deploy stage (F-19); hosts and secrets stay |
 | `.claude/fleet-brief.md` | FamilyOffice main checkout (untracked) | Per-repo technical notes the tower appends to briefs |
 | Orca `orca-cli` / `orchestration` skills | `~/.agents/skills/` | Vendor stubs that load guides from the Orca binary; versioned with Orca |
