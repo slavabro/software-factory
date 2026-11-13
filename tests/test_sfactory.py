@@ -1,9 +1,8 @@
-"""The factory engine: config, versions, manifests, scan (fake registries), deprecations, runner, schedules.
+"""The factory CLI: config, versions, manifests, scan (fake registries), deprecations, runner.
 Run: python3 -m unittest discover -s tests"""
 
 import contextlib
 import io
-import plistlib
 import subprocess
 import sys
 import tempfile
@@ -13,7 +12,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins" / "factory"))
 
-from sfactory import config, deprecations, guard, manifests, runner, schedule, upgrade, versions  # noqa: E402
+from sfactory import config, deprecations, guard, manifests, runner, upgrade, versions  # noqa: E402
 
 
 def write(root: Path, rel: str, text: str) -> None:
@@ -232,22 +231,6 @@ class RunnerAndScheduleTests(Repo):
         self.assertEqual(runner.agent_argv(cfg, "/factory:upgrade"), ["my-agent", "--task", "/factory:upgrade"])
         self.assertIn("Bash(./x *)", cfg.agent_allowed_tools)
         self.assertIn("Read", cfg.agent_allowed_tools)
-
-    def test_cron_to_launchd_systemd_and_crontab(self):
-        write(self.root, ".factory.toml", '[repo]\nname = "demo"\n[upgrade]\nschedule = "30 6 * * 1,4"\n')
-        cfg = config.load(self.root)
-        plist = plistlib.loads(schedule.launchd_plist(cfg, "upgrade", cfg.upgrade.schedule))
-        self.assertEqual(plist["Label"], "dev.software-factory.demo.upgrade")
-        self.assertEqual(plist["StartCalendarInterval"], [{"Minute": 30, "Hour": 6, "Weekday": 1}, {"Minute": 30, "Hour": 6, "Weekday": 4}])
-        self.assertEqual(plist["ProgramArguments"][1:], ["run", "upgrade", "--repo", str(cfg.root)])
-        _, timer = schedule.systemd_units(cfg, "upgrade", cfg.upgrade.schedule)
-        self.assertIn("OnCalendar=Mon,Thu *-*-* 06:30:00", timer)
-        self.assertTrue(schedule.crontab_line(cfg, "upgrade", cfg.upgrade.schedule).startswith("30 6 * * 1,4 "))
-
-    def test_bad_cron_is_refused(self):
-        for bad in ["* * *", "*/5 * * * *", "0 6 * * 1-5"]:
-            with self.assertRaises(ValueError):
-                schedule.parse_cron(bad)
 
     def _origin(self, files: dict[str, str]):
         """A bare origin with one commit on main holding `files`, and self.root cloned from it."""

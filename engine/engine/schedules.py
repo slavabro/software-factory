@@ -1,6 +1,7 @@
 """Temporal Schedules from each repo's .factory.toml (docs/designs/engine.md, section 4).
 
-One Schedule per (repo, team) with a schedule, ID `schedule/<repo>/<team>`, starting a ScheduleTick: UTC cron,
+One Schedule per (repo, team) with a schedule, ID `schedule/<repo>/<team>`, starting a ScheduleTick: cron in the
+engine's time zone (engine.toml `time_zone`, default the home machine's; Temporal handles daylight saving),
 overlap SKIP (a tick takes a second; the team serialises its runs), catchup window one day (a laptop that slept
 through the time runs once on waking), jitter 5 minutes. New schedules start paused until the team has run once by
 hand. Reconciling creates, updates (keeping paused and its note) and deletes schedules to match the config. A repo
@@ -83,12 +84,12 @@ def desired(settings: EngineSettings) -> Wanted:
     return out
 
 
-def build(want: Desired, paused: bool, note: str) -> Schedule:
+def build(want: Desired, paused: bool, note: str, time_zone: str = "UTC") -> Schedule:
     return Schedule(
         action=ScheduleActionStartWorkflow(
             "ScheduleTick", TickInput(ref=want.ref), id=f"tick/{want.ref.repo_name}/{want.ref.team}", task_queue=TASK_QUEUE
         ),
-        spec=ScheduleSpec(cron_expressions=[want.cron], jitter=JITTER, time_zone_name="UTC"),
+        spec=ScheduleSpec(cron_expressions=[want.cron], jitter=JITTER, time_zone_name=time_zone),
         policy=SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP, catchup_window=CATCHUP),
         state=ScheduleState(paused=paused, note=note),
     )
@@ -101,13 +102,13 @@ async def reconcile(client: Client, settings: EngineSettings) -> list[str]:
     for sid, w in sorted(want.schedules.items()):
         try:
             if sid not in have:
-                await client.create_schedule(sid, build(w, paused=True, note=NEW_NOTE))
+                await client.create_schedule(sid, build(w, paused=True, note=NEW_NOTE, time_zone=settings.time_zone))
                 report.append(f"created {sid} ({w.cron}, paused until a first run by hand)")
                 continue
 
             def update(inp: ScheduleUpdateInput, w: Desired = w) -> ScheduleUpdate:
                 state = inp.description.schedule.state  # keep paused and its note: the team's, not the config's
-                return ScheduleUpdate(schedule=build(w, paused=state.paused, note=state.note or ""))
+                return ScheduleUpdate(schedule=build(w, paused=state.paused, note=state.note or "", time_zone=settings.time_zone))
 
             await client.get_schedule_handle(sid).update(update)
             report.append(f"updated {sid} ({w.cron})")

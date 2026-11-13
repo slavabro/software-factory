@@ -118,7 +118,7 @@ workflow ID (unique per scheduled time, so a retried tick is deduped).
 
 ## 4. Schedules and pausing
 
-- **Declared in each repo's `.factory.toml`** (`[teams.qa] schedule = "0 2 * * *"`, UTC; the upgrade team's
+- **Declared in each repo's `.factory.toml`** (`[teams.qa] schedule = "0 2 * * *"`; the upgrade team's
   schedule is `[upgrade] schedule`), as committed on its default branch. `engine.schedules`
   reconciles one Temporal Schedule per (repo, team), ID `schedule/<repo>/<team>`: created, updated through
   `handle.update()`, or deleted to match the config, whenever `factory engine upgrade` runs or the config changes.
@@ -126,6 +126,9 @@ workflow ID (unique per scheduled time, so a retried tick is deduped).
 - **Catchup window = one day:** a laptop that slept through 02:00 runs when it wakes; a run missed by more than a
   day is dropped, not replayed.
 - **Jitter 5 minutes,** so teams don't start on the same second.
+- **Time zone:** cron means the engine's time zone (`engine.toml` `time_zone`, default the home machine's), as the
+  launchd schedules it replaces did; Temporal applies daylight-saving changes. (Temporal suggests UTC to avoid
+  surprises; a principal reads "Mondays 06:00" as local, and the times used are far from the 02:00–03:00 change.)
 - **One owner for "paused": the team's Schedule.** Its pause carries a note with the reason. New schedules start
   paused until the team has run once by hand with a good result; three failed runs in a row pause it (the run's last
   step does that) and tell the tower. `wake_team` and `factory engine signal` check the schedule's pause before

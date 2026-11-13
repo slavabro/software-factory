@@ -371,6 +371,13 @@ class BuildIdTest(unittest.TestCase):
 
 
 class SettingsTest(unittest.TestCase):
+    def test_the_default_time_zone_is_this_machines(self):
+        with mock.patch.dict(os.environ, {"TZ": "Europe/Lisbon"}):
+            self.assertEqual(settings_mod.local_time_zone(), "Europe/Lisbon")
+        with mock.patch.dict(os.environ, {"TZ": ""}), mock.patch.object(settings_mod.os.path, "realpath",
+                                                                         return_value="/var/db/timezone/zoneinfo/Asia/Jerusalem"):
+            self.assertEqual(settings_mod.local_time_zone(), "Asia/Jerusalem")
+
     def test_unknown_keys_are_refused(self):
         import tempfile
 
