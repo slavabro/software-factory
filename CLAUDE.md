@@ -26,6 +26,7 @@ never name a project's domain, paths or people (docs may cite a consumer as an e
 python3 -m unittest discover -s tests
 PYTHONPATH=plugins/factory python3 -m skillcheck . --strict
 claude plugin validate --strict . && claude plugin validate --strict plugins/factory
+# runtime/ (in a virtualenv): pip install ./runtime && (cd runtime && python -m unittest discover -s tests -t .)
 ```
 
 ## Adding
