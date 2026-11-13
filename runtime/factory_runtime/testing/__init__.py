@@ -5,6 +5,8 @@
   tests, not in production. Pass `workflow_runner=` to override.
 - `time_skipping_env(...)`: the SDK's time-skipping test server with the shared data converter.
 - `query_eventually(...)`: poll a workflow query until a predicate holds.
+- `factory_runtime.testing.golden`: golden runs of the process engine (`GoldenHarness`), with the generic stubs in
+  `factory_runtime.testing.golden_stubs`; imported by its own name.
 """
 
 from __future__ import annotations
@@ -21,8 +23,9 @@ from factory_runtime.temporal.converter import data_converter
 from factory_runtime.temporal.sandbox import STRICT_IMPORT_POLICY, build_workflow_runner
 from factory_runtime.temporal.settings import DEFAULT_COMPRESS_MIN_BYTES, DEFAULT_WARN_BYTES
 
-# Workflow classes defined in test modules, and the test runners' own machinery those modules import.
-TEST_PASSTHROUGH_MODULES = ("tests", "_pytest", "pytest", "unittest")
+# Workflow classes defined in test modules (a product's, and this kit's golden stubs), and the test runners' own
+# machinery those modules import.
+TEST_PASSTHROUGH_MODULES = ("tests", "factory_runtime.testing", "_pytest", "pytest", "unittest")
 
 
 def make_worker(client: Client, passthrough: Iterable[str] = (), **kwargs: Any) -> Worker:

@@ -23,7 +23,7 @@ login, so it installs in slim Docker images too.
 | `signal_with_start(client, …)` | start a workflow or join its run, delivering a signal atomically |
 
 `factory_runtime.testing`: `make_worker` (the production runner with the strict import policy), `time_skipping_env`,
-`query_eventually`.
+`query_eventually`. `factory_runtime.testing.golden`: the process engine's golden runs (below).
 
 The package never reads a product's config: everything comes in as arguments. `TemporalSettings` covers a local
 server and Temporal Cloud (`tls`, `api_key`); anything else `Client.connect` takes goes through `get_client`.
@@ -80,6 +80,14 @@ step-level one command by command):
 - An unknown `parent_close_policy:` on a workflow step logs a warning and keeps the server default.
 - `for_each`: an inner step's own `on_error:` is ignored (only the `for_each` step's counts); a scalar `items:` is one
   item, None gives `[]`; an inner type not flagged `for_each` gives None per item.
+
+**Golden runs** (`factory_runtime.testing.golden`): one harness for the runtime's recordings and a product's, so
+they normalize the same way. `GoldenHarness(fixture_dir, interpreters, workflows=…, activities=…, workflow_runner=…,
+data_converter=…, stable_task_failure_messages=…, prepare_case=…)` runs a synthetic process file (format: the
+module's docstring) in the time-skipping server, normalizes its history to commands, and replays saved histories.
+The generic stubs are in `factory_runtime.testing.golden_stubs`; a product adds its interpreters, the stubs of its
+own step types, its converter and sandbox runner. A workflow task failure is kept as its exception type, plus the
+message only when the engine wrote it, so a CPython or temporalio upgrade does not change a golden.
 
 **Version:** `factory_runtime.__version__`; a release is the factory tag `v<version>`.
 

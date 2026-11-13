@@ -6,7 +6,7 @@
     {
       "command": "workflow_task_failed",
       "failure": {
-        "message": "'NoneType' object has no attribute 'get'",
+        "type": "AttributeError",
         "info": "application_failure_info"
       }
     },

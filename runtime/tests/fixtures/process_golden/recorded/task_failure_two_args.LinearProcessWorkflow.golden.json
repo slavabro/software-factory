@@ -27,7 +27,7 @@
     {
       "command": "workflow_task_failed",
       "failure": {
-        "message": "execute_activity() takes from 1 to 2 positional arguments but 3 positional arguments (and 2 keyword-only arguments) were given",
+        "type": "TypeError",
         "info": "application_failure_info"
       }
     },

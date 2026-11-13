@@ -6,6 +6,7 @@
     {
       "command": "workflow_task_failed",
       "failure": {
+        "type": "ValueError",
         "message": "Process definition is None",
         "info": "application_failure_info"
       }
