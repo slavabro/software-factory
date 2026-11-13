@@ -59,10 +59,18 @@ that owns it:
 
 ## 2. The factory engine (F-50)
 
-**Where it runs.** On the home machine (the F-06 setting), its own Temporal server:
-- `temporal server start-dev` with a file database under `~/.local/state/software-factory/`, namespace `factory`;
-- its own ports, so it never shares a process with a product's dev server (a product restart can't touch it);
-- kept up by launchd (or a systemd user service on Linux), the same way `factory schedule` installs things today.
+**Separate programs.** The factory and each product are separate programs, each with its own Temporal: its own
+server, database, UI, workers and history. They share only code (`runtime/`, installed as a package), never a running
+server. Nothing the factory does can stop, slow or fill a product's Temporal, and the reverse.
+
+**Where it runs.** On the home machine (the F-06 setting):
+- **The server** is its own Docker Compose project, `software-factory`: a Temporal server, its own Postgres (a named
+  volume, so history survives restarts) and the Temporal UI, on its own ports (7243 for the server, 8243 for the UI;
+  settings). It is a Docker project, not `temporal server start-dev`, because a product's dev scripts may stop every
+  `start-dev` process on the machine (FamilyOffice's `start_all.sh` does), and a dev server keeps no history.
+- **The worker** runs on the host, not in a container, because its activities drive the laptop's own tools: git
+  worktrees, agent sessions, `gh`. It is kept up by launchd (or a systemd user service on Linux), the same way
+  `factory schedule` installs things today.
 
 **Code.** `engine/` in this repo (D-5): its own `pyproject.toml` depending on `runtime/` and `temporalio`,
 and its own CI job. `factory engine install` creates its virtualenv under `~/.local/share/software-factory/`, then
