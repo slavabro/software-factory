@@ -34,7 +34,7 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         self.repo, _, tmp = make_repo("true")
         self.addCleanup(tmp.cleanup)
         self.addCleanup(os.environ.pop, "FACTORY_ENGINE_STATE", None)
-        self.settings = EngineSettings(repos=(str(self.repo),))
+        self.settings = EngineSettings(repos=(str(self.repo),), time_zone="UTC")
         self.ref = TeamRef(repo=str(self.repo.resolve()), repo_name="demo", team="qa")
 
     async def test_schedules_follow_the_config_and_keep_their_pause(self):
@@ -53,6 +53,13 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         self.settings = EngineSettings(repos=())
         report = await schedules.reconcile(self.client, self.settings)
         self.assertIn("deleted schedule/demo/qa (no longer in config)", report)
+
+    async def test_schedules_follow_the_engine_time_zone(self):
+        self.settings = EngineSettings(repos=(str(self.repo),), time_zone="Asia/Jerusalem")
+        await schedules.reconcile(self.client, self.settings)
+        desc = await self.client.get_schedule_handle(self.ref.schedule_id).describe()
+        nxt = desc.info.next_action_times[0].astimezone(__import__("zoneinfo").ZoneInfo("Asia/Jerusalem"))
+        self.assertEqual((nxt.hour, nxt.minute < 6), (2, True))  # 02:00 there, whatever UTC says
 
     async def test_a_repo_without_a_factory_toml_gets_no_schedules(self):
         from tests.repo_fixture import git

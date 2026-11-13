@@ -6,8 +6,8 @@
     factory task ...                       the task system (`factory task --help`); with [tasks] system = "commands"
                                            only `new --title T --body-file F [--priority P]` and `exists QUERY`,
                                            which run the repo's [tasks] new / exists with every value quoted
-    factory run CAPABILITY [--dry-run]     run a capability unattended in a fresh worktree (e.g. `upgrade`)
-    factory schedule install|remove|show CAPABILITY [--print]
+    factory run CAPABILITY [--dry-run]     run a capability once, here and now, in a fresh worktree (e.g. `upgrade`);
+                                           scheduled and event-driven runs belong to the engine
     factory engine ...                     the factory engine: install, upgrade, status, run-now … (`factory engine --help`)
 
 Every command takes --repo PATH (default: the git root of the current directory).
@@ -24,7 +24,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import config as config_mod
-from . import deprecations, engine, runner, schedule, tasks, upgrade
+from . import deprecations, engine, runner, tasks, upgrade
 
 
 def _root(path: Path | None) -> Path:
@@ -84,11 +84,7 @@ def main(argv: list[str] | None = None) -> int:
     rn.add_argument("capability")
     rn.add_argument("--dry-run", action="store_true")
     rn.add_argument("--keep", action="store_true", help="keep the worktree even if nothing was pushed")
-    sh = sub.add_parser("schedule")
-    sh.add_argument("action", choices=["install", "remove", "show"])
-    sh.add_argument("capability")
-    sh.add_argument("--print", action="store_true", help="show what would be written; change nothing")
-    for p in (sc, dp, rn, sh):
+    for p in (sc, dp, rn):
         p.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -116,14 +112,6 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if any(d.kind == "ours" for d in found) else 0
     if args.cmd == "run":
         return runner.run(cfg, args.capability, dry_run=args.dry_run, keep=args.keep)
-    if args.cmd == "schedule":
-        if args.action == "show":
-            print(f"{args.capability}: {schedule.schedule_of(cfg, args.capability)} via {schedule.backend()} "
-                  f"({schedule.label(cfg, args.capability)})")
-            return 0
-        fn = schedule.install if args.action == "install" else schedule.remove
-        print(fn(cfg, args.capability, print_only=args.print))
-        return 0
     return 2
 
 

@@ -39,7 +39,7 @@ with = ""                     # command run with {file} = the run's digest (e.g.
 
 [upgrade]
 enabled = true
-schedule = "0 6 * * 1"        # cron (minute hour day month weekday; numbers, comma lists, *); "off" = no schedule
+schedule = "0 6 * * 1"        # cron (minute hour day month weekday) in the engine's time zone; "off" = no schedule
 ecosystems = ["pip", "npm", "docker"]
 manifests = []                # empty = auto-detect requirements*.txt, pyproject.toml, package.json, compose, Dockerfile
 risky = []                    # package-name globs that become tasks, never PRs (databases, workflow servers…)
@@ -50,7 +50,7 @@ max_prs = 3                   # per run; the upgrade capability is also the engi
 
 [teams.qa]                    # a standing team the engine runs (docs/designs/engine.md); one table per team
 prompt = "/factory:qa"        # required: what the agent session is asked to do
-schedule = "0 2 * * *"        # cron, UTC; "off" (default) = events and `factory engine run-now` only
+schedule = "0 2 * * *"        # cron in the engine's time zone; "off" (default) = events and `factory engine run-now` only
 budget_minutes = 90           # one run's agent time, across retries
 wake_on = ["ci_red"]          # events that wake it: ci_red, deploy_failed, incident, merged
 ```
@@ -76,11 +76,13 @@ wake_on = ["ci_red"]          # events that wake it: ci_red, deploy_failed, inci
 | `<check> 2>&1 \| factory upgrade deprecations` | deprecation warnings raised from the repo's own code; exit 1 while any |
 | `factory task …` | the task system ([tasks.md](tasks.md)): `init`, `new`, `start`, `subtask`, `complete`, `close`, `set`, `show`, `check`, `check-pr`, `render`, `exists`; with `system = "commands"` only `new` / `exists`, running the repo's commands with every value shell-quoted |
 | `factory run upgrade [--dry-run] [--keep]` | the whole upgrade unattended: fresh worktree off `origin/<default_branch>`, `[worktree] setup`, then the agent runs `/factory:upgrade`; one run per repo at a time; log under `~/.cache/software-factory/logs/<repo>/` |
-| `factory schedule install\|remove\|show upgrade [--print]` | the repo's `schedule` as a launchd agent (macOS), a systemd user timer (Linux) or a crontab line (anything else) |
+| `factory engine install --repo PATH` | the engine runs this repo's teams: each team's `schedule` becomes a Temporal Schedule (in the engine's time zone, `engine.toml` `time_zone`, default the machine's), paused until its first run by hand |
+| `factory engine run-now --repo PATH --team T` · `status` · `pause` · `resume` · `signal` | run a team now, see schedules and recent runs, pause or resume a team, wake teams on an event ([engine/README.md](../engine/README.md)) |
 
 ## Moving to another machine or runner
 
-- **Another laptop:** clone software-factory, `install.sh`, then `factory schedule install upgrade --repo <path>`.
+- **Another laptop:** clone software-factory, `install.sh`, then `factory engine install --repo <path>` on the one
+  machine that should run the schedules (the home machine, F-06).
 - **Another agent client:** change `[agent] command` (e.g. a different CLI agent that takes a prompt).
 - **CI or a cloud box instead of a laptop:** run `factory run upgrade --repo .` from that environment's scheduler; it
   needs git push rights, `gh` auth and the agent's credentials there.
