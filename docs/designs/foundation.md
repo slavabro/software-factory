@@ -10,8 +10,9 @@ piece moves, its old copy is removed in the same change, so there are never two 
 **Where and how.** `runtime/` in this repo (D-2), installable package `factory-runtime`, import name `factory_runtime`, Python 3.11+,
 dependencies `temporalio` and `pydantic` (more only when a slice needs them), tested in its own CI job. It ships
 with the factory's version tag.
-A product depends on `factory-runtime @ git+https://github.com/slavabro/software-factory@vX.Y#subdirectory=runtime`
-(one tag for the whole factory, so tools and runtime always match), and F-01's upgrade
+A product depends on
+`factory-runtime @ https://github.com/slavabro/software-factory/archive/<commit>.tar.gz#subdirectory=runtime`, the same
+commit as its action pin (one version for the whole factory, so tools and runtime always match), and F-01's upgrade
 run moves that pin forward like any other dependency.
 
 **No product config inside.** The package never imports a product's settings. Every entry point takes what it
@@ -100,7 +101,7 @@ F-41 (AI access) runs in parallel from step 2.
 
 ## To settle while building
 
-- **CI access to the private factory repo.** A product's CI installs `runtime/` from the private factory repo. The plan
-  is a read-only token stored as a repo secret. The check is that a FamilyOffice CI run installs the package.
+- **Access.** Settled 2026-11-13: the factory repo is public, so CI, laptops and Docker builds install the runtime
+  with no token.
 - **Ports for the engine's server.** Pick free defaults that don't clash with a product's dev server (FamilyOffice
   uses 7233 and 8233), stored in the engine's config.
