@@ -3,8 +3,12 @@
 Building blocks a product installs instead of rebuilding. Design and order: `docs/designs/foundation.md`.
 
 ```
-factory-runtime @ git+https://github.com/slavabro/software-factory@vX.Y#subdirectory=runtime
+factory-runtime @ https://github.com/slavabro/software-factory/archive/<commit>.tar.gz#subdirectory=runtime
 ```
+
+Pin the same commit as the project's `slavabro/software-factory@<commit>` action, and keep a test that checks the
+two are equal (FamilyOffice: `tests/standalone/test_software_factory_pin.py`). The archive URL needs no git and no
+login, so it installs in slim Docker images too.
 
 ## `factory_runtime.temporal`
 

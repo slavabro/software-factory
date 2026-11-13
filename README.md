@@ -17,7 +17,7 @@ every laptop. Each project keeps only what is specific to it (its domain reviewe
 | `plugins/factory/skills/upgrade/` | `/factory:upgrade` — dependency upgrades end to end: release notes, code changes, verify, no deprecations, grouped PRs through the repo's gate | part of the `factory` plugin |
 | `home/skills/fleet/` | `/fleet` — Orca control tower: one session watches, relays and lands for every agent | `~/.claude/skills/fleet` |
 | `home/bin/tower` | starts the tower session (Sonnet, Telegram channel) | `~/.local/bin/tower` |
-| `runtime/` | **factory-runtime** — the shared runtime products install ([runtime/README.md](runtime/README.md)): the Temporal core today (settings, client, data converter, sandbox, activity helpers, run history, test kit); the process engine next. Needs Temporal and Pydantic | `factory-runtime @ git+https://github.com/slavabro/software-factory@vX.Y#subdirectory=runtime` |
+| `runtime/` | **factory-runtime** — the shared runtime products install ([runtime/README.md](runtime/README.md)): the Temporal core today (settings, client, data converter, sandbox, activity helpers, run history, test kit); the process engine next. Needs Temporal and Pydantic | `factory-runtime @ https://github.com/slavabro/software-factory/archive/<commit>.tar.gz#subdirectory=runtime` (same commit as the action pin) |
 | `docs/INVENTORY.md` | what moved here and what stays per project | — |
 
 Rule catalog with sources: [plugins/factory/skills/skills-review/references/rules.md](plugins/factory/skills/skills-review/references/rules.md).
@@ -36,7 +36,7 @@ without a clone: `claude plugin marketplace add slavabro/software-factory` then
 ## Use in a repo
 
 - Local: `skillcheck --strict` from the repo root (a `make skills-check` target is the convention).
-- CI, as a PR check (the repo must be allowed to use this private repo's actions — already set for slavabro's repos):
+- CI, as a PR check (the repo is public, so any repo can use the action):
 
   ```yaml
   - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
