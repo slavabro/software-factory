@@ -7,7 +7,7 @@ piece moves, its old copy is removed in the same change, so there are never two 
 
 ## 1. The shared runtime package (F-42)
 
-**Where and how.** `runtime/` in this repo (D-2), installable package `factory-runtime`, import name `factory_runtime`, Python 3.12+,
+**Where and how.** `runtime/` in this repo (D-2), installable package `factory-runtime`, import name `factory_runtime`, Python 3.11+,
 dependencies `temporalio` and `pydantic` (more only when a slice needs them), tested in its own CI job. It ships
 with the factory's version tag.
 A product depends on `factory-runtime @ git+https://github.com/slavabro/software-factory@vX.Y#subdirectory=runtime`
@@ -28,7 +28,7 @@ From FamilyOffice `common/temporal/`, about 450 lines:
 |-------|---------|
 | `client.py` | `factory_runtime.temporal.client`: process-wide client from `TemporalSettings` |
 | `data_converter.py` | `factory_runtime.temporal.converter`: Pydantic JSON plus compression of large payloads |
-| `sandbox.py` | `factory_runtime.temporal.sandbox`: `build_workflow_runner(extra_passthrough=…, import_policy=…)`, with the strict test policy |
+| `sandbox.py` | `factory_runtime.temporal.sandbox`: `build_workflow_runner(passthrough=…, import_policy=…)`, with the strict test policy |
 | `activity_helpers.py`, `run_history.py`, `process_runs.py` | `factory_runtime.temporal.*`, same jobs |
 | (new) | `factory_runtime.testing`: a time-skipping test environment built with the same runner and converter, so tests and production can't differ |
 
