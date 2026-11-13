@@ -23,7 +23,6 @@ import secrets
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
 import tomllib
@@ -72,10 +71,11 @@ def settings() -> dict:
 
 
 def write_settings(repos: list[str]) -> None:
-    """engine.toml with `repos` added (paths as given, `~` kept); other keys untouched."""
+    """engine.toml with `repos` added as absolute paths (a `~/…` path is kept as typed); other keys untouched. A
+    relative path would mean a different repo from every directory the engine runs in."""
     current = settings()
     known = list(current.get("repos", []))
-    for repo in repos:
+    for repo in (r if r.startswith("~") else str(Path(r).resolve()) for r in repos):
         if repo not in known:
             known.append(repo)
     lines = [f"repos = [{', '.join(repr_toml(r) for r in known)}]"]
@@ -104,32 +104,39 @@ def ensure_env_file() -> None:
         f.write(f"ENGINE_DB_PASSWORD={secrets.token_urlsafe(24)}\n")
 
 
-def compose(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+def compose_file() -> Path:
+    """The current build's compose file (frozen with its code); this checkout's before the first build."""
+    build = current_build()
+    frozen = BUILDS / build / COMPOSE if build else None
+    return frozen if frozen and frozen.is_file() else FACTORY / COMPOSE
+
+
+def compose(*args: str, check: bool = True, file: Path | None = None) -> subprocess.CompletedProcess:
     s = settings()
     env = dict(os.environ, ENGINE_SERVER_PORT=str(s.get("server_port", 7243)), ENGINE_UI_PORT=str(s.get("ui_port", 8243)))
-    cmd = ["docker", "compose", "-p", PROJECT, "--env-file", str(ENV_FILE), "-f", str(FACTORY / COMPOSE), *args]
+    cmd = ["docker", "compose", "-p", PROJECT, "--env-file", str(ENV_FILE), "-f", str(file or compose_file()), *args]
     proc = _run(cmd, env=env, capture_output=True)
     if check and proc.returncode:
         raise SystemExit(f"factory engine: `{' '.join(cmd[2:])}` failed:\n{(proc.stderr or proc.stdout).strip()[-2000:]}")
     return proc
 
 
-def server_up() -> None:
+def server_up(file: Path | None = None) -> None:
     """Containers up, and the one-shot setup (schema, namespace, search attributes) succeeded: the setup waits for
     a healthy server, so its success means the server is serving. (`up --wait` counts a one-shot that exited as a
     failure, so the one-shots are awaited by exit code instead.)"""
-    compose("up", "-d")
+    compose("up", "-d", file=file)
     deadline = time.monotonic() + 600  # a first start pulls images and creates the database
     for one_shot in ("temporal-schema", "temporal-setup"):
         while True:
-            state = compose("ps", "-a", "--format", "{{.State}} {{.ExitCode}}", one_shot, check=False).stdout.split()
+            state = compose("ps", "-a", "--format", "{{.State}} {{.ExitCode}}", one_shot, check=False, file=file).stdout.split()
             if state[:1] == ["exited"]:
                 break
             if time.monotonic() > deadline:
                 raise SystemExit(f"factory engine: {one_shot} did not finish in 10 minutes")
             time.sleep(2)
         if state[1:2] != ["0"]:
-            logs = compose("logs", "--no-color", "--tail", "20", one_shot, check=False).stdout
+            logs = compose("logs", "--no-color", "--tail", "20", one_shot, check=False, file=file).stdout
             raise SystemExit(f"factory engine: {one_shot} failed:\n{logs}")
 
 
@@ -153,8 +160,10 @@ def snapshot(source: Path = FACTORY) -> tuple[str, Path]:
         if archive.returncode:
             shutil.rmtree(staging)
             raise SystemExit(f"factory engine: git archive failed: {archive.stderr}")
-        with tarfile.open(tar.name) as t:
-            t.extractall(staging, filter="data")
+        untar = subprocess.run(["tar", "-xf", tar.name, "-C", str(staging)], capture_output=True, text=True)
+        if untar.returncode:
+            shutil.rmtree(staging)
+            raise SystemExit(f"factory engine: unpacking the build failed: {untar.stderr}")
     build = build_id(staging)
     target = BUILDS / build
     if target.exists():
@@ -166,15 +175,23 @@ def snapshot(source: Path = FACTORY) -> tuple[str, Path]:
 
 
 def ensure_venv(build_dir: Path) -> Path:
-    python = build_dir / ".venv" / "bin" / "python"
-    if python.exists():
+    """The build's virtualenv. It counts as installed only once every step succeeded (a `.complete` marker written
+    last), so an interrupted install (^C, a sleep, a network error) is rebuilt next time, never used half done."""
+    venv = build_dir / ".venv"
+    python, done = venv / "bin" / "python", venv / ".complete"
+    if done.is_file():
         return python
-    _run([sys.executable, "-m", "venv", str(build_dir / ".venv")], check=True)
-    pip = [str(python), "-m", "pip", "install", "--quiet", "-r", "engine/requirements.lock", "-e", "runtime", "-e", "engine"]
-    proc = _run(pip, cwd=build_dir, capture_output=True)
-    if proc.returncode:
-        shutil.rmtree(build_dir / ".venv")
-        raise SystemExit(f"factory engine: installing the engine failed:\n{proc.stderr[-2000:]}")
+    shutil.rmtree(venv, ignore_errors=True)
+    steps = [
+        [sys.executable, "-m", "venv", str(venv)],
+        [str(python), "-m", "pip", "install", "--quiet", "-r", "engine/requirements.lock", "-e", "runtime", "-e", "engine"],
+    ]
+    for step in steps:
+        proc = _run(step, cwd=build_dir, capture_output=True)
+        if proc.returncode:
+            shutil.rmtree(venv, ignore_errors=True)
+            raise SystemExit(f"factory engine: building the engine's environment failed:\n{proc.stderr[-2000:]}")
+    done.write_text("")
     return python
 
 
@@ -216,16 +233,35 @@ def worker_service(build: str, build_dir: Path, python: Path) -> dict:
         "EnvironmentVariables": {
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "FACTORY_ENGINE_CONFIG": str(SETTINGS),
-            **{k: v for k, v in os.environ.items() if k == "FACTORY_ENGINE_STATE"},
+            **{k: v for k, v in os.environ.items() if k in {"FACTORY_ENGINE_STATE", "SSH_AUTH_SOCK"}},
         },
         "RunAtLoad": True,
         "KeepAlive": True,
         "ThrottleInterval": 30,
         "ExitTimeOut": SHUTDOWN_ALLOWANCE,  # the worker's graceful stop plus an agent group's kill grace
-        "ProcessType": "Background",
+        "ProcessType": "Standard",  # Background would throttle the agents and test suites the worker starts
         "StandardOutPath": str(logs / f"worker-{build}.log"),
         "StandardErrorPath": str(logs / f"worker-{build}.log"),
     }
+
+
+def _sd_quote(value: str) -> str:
+    """A systemd unit value: double-quoted, with backslash, quote and % escaped."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+
+def systemd_unit(build: str, spec: dict) -> str:
+    env = " ".join(_sd_quote(f"{k}={v}") for k, v in spec["EnvironmentVariables"].items())
+    log = spec["StandardOutPath"].replace("%", "%%")
+    return (
+        f"[Unit]\nDescription=software factory engine worker {build}\n\n[Service]\n"
+        f"WorkingDirectory={_sd_quote(spec['WorkingDirectory'])}\nEnvironment={env}\n"
+        f"ExecStart={' '.join(_sd_quote(a) for a in spec['ProgramArguments'])}\n"
+        # mixed: the stop signal goes to the worker alone, which cancels its sessions and kills their groups itself;
+        # only what is left after TimeoutStopSec is killed. (The default would SIGTERM the agents directly.)
+        f"KillMode=mixed\nRestart=always\nRestartSec=30\nTimeoutStopSec={SHUTDOWN_ALLOWANCE}\n"
+        f"StandardOutput=append:{log}\nStandardError=append:{log}\n\n[Install]\nWantedBy=default.target\n"
+    )
 
 
 def start_worker(build: str, build_dir: Path, python: Path) -> str:
@@ -241,14 +277,12 @@ def start_worker(build: str, build_dir: Path, python: Path) -> str:
         unit = _unit_path(build)
         unit.parent.mkdir(parents=True, exist_ok=True)
         env = " ".join(f'"{k}={v}"' for k, v in spec["EnvironmentVariables"].items())
-        unit.write_text(
-            f"[Unit]\nDescription=software factory engine worker {build}\n\n[Service]\n"
-            f"WorkingDirectory={build_dir}\nEnvironment={env}\nExecStart={' '.join(spec['ProgramArguments'])}\n"
-            f"Restart=always\nRestartSec=30\nTimeoutStopSec={SHUTDOWN_ALLOWANCE}\nStandardOutput=append:{spec['StandardOutPath']}\n"
-            f"StandardError=append:{spec['StandardErrorPath']}\n\n[Install]\nWantedBy=default.target\n"
-        )
+        unit.write_text(systemd_unit(build, spec))
         _run(["systemctl", "--user", "daemon-reload"], check=True)
         _run(["systemctl", "--user", "enable", "--now", unit.name], check=True)
+        # Without lingering, user services stop at logout; enabling it may need the admin's consent.
+        if _run(["loginctl", "enable-linger"], capture_output=True).returncode:
+            print("factory engine: run `loginctl enable-linger` (may need sudo) so the worker keeps running after logout")
         return f"systemd {unit.name}"
     raise SystemExit("factory engine: no launchd or systemd here; run the worker yourself: "
                      + " ".join(spec["ProgramArguments"]))
@@ -280,7 +314,9 @@ def deploy() -> list[str]:
         time.sleep(2)
     else:
         raise SystemExit(f"factory engine: build {build} never became current:\n{proc.stderr[-1500:]}")
-    CURRENT.write_text(build)
+    tmp = CURRENT.with_suffix(".tmp")
+    tmp.write_text(build)
+    tmp.replace(CURRENT)
     out.append(f"current build: {build}" + (f" (was {previous})" if previous and previous != build else ""))
     out += retire(python, keep=build)
     reconcile = engine_cli(python, "reconcile", capture=True)
@@ -321,7 +357,8 @@ def install(repos: list[str]) -> int:
         if port_taken(port) and not running:
             raise SystemExit(f"factory engine: port {port} ({key}) is taken; set {key} in {SETTINGS}")
     print("factory engine: starting the server (first start pulls images and creates the database)")
-    server_up()
+    _, build_dir = snapshot()
+    server_up(build_dir / COMPOSE)
     for line in deploy():
         print(f"factory engine: {line}")
     print(f"factory engine: UI http://localhost:{s.get('ui_port', 8243)} (namespace factory)")
@@ -344,7 +381,8 @@ def main(argv: list[str]) -> int:
     if cmd == "start":
         server_up()
         for build in installed_builds():
-            start_worker(build, BUILDS / build, BUILDS / build / ".venv" / "bin" / "python")
+            if not _service_present(build):  # restarting a running worker would cancel its runs
+                start_worker(build, BUILDS / build, BUILDS / build / ".venv" / "bin" / "python")
         print("factory engine: started")
         return 0
     if cmd == "stop":

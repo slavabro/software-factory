@@ -7,6 +7,7 @@ import os
 import tempfile
 import json
 import signal
+import time
 import subprocess
 import time
 import unittest
@@ -84,10 +85,12 @@ class RepoActivitiesTest(unittest.IsolatedAsyncioTestCase):
 
 
 class PrepareTest(unittest.IsolatedAsyncioTestCase):
-    async def test_cancel_kills_the_setup_it_is_running(self):
+    async def test_cancel_kills_the_setup_even_if_it_ignores_term(self):
+        os.environ["FACTORY_STOP_GRACE"] = "1"
+        self.addCleanup(os.environ.pop, "FACTORY_STOP_GRACE", None)
         marker = Path(tempfile.mkdtemp()) / "setup-pid"
         self.addCleanup(lambda: marker.parent.exists() and __import__("shutil").rmtree(marker.parent))
-        repo, _, tmp = make_repo("true", extra_toml=f'\n[worktree]\nsetup = ["echo $$ > {marker}; sleep 60"]\n')
+        repo, _, tmp = make_repo("true", extra_toml=f'\n[worktree]\nsetup = ["trap \\"\\" TERM; echo $$ > {marker}; sleep 60"]\n')
         self.addCleanup(tmp.cleanup)
         self.addCleanup(os.environ.pop, "FACTORY_ENGINE_STATE", None)
         ref = TeamRef(repo=str(repo), repo_name="demo", team="qa")
@@ -146,6 +149,12 @@ class AgentSessionTest(unittest.IsolatedAsyncioTestCase):
         self.step = StepInput(ref=self.ref, paths=plan.paths, prompt=plan.prompt)
         await self.env.run(repo_acts.prepare_worktree, self.step)
         return Path(plan.paths.worktree)
+
+    async def test_an_agent_stopped_by_a_signal_is_retried_not_failed(self):
+        await self.setup_repo("kill -TERM $$")
+        with self.assertRaises(ApplicationError) as caught:
+            await self.env.run(agent.run_agent_session, self.step)
+        self.assertEqual((caught.exception.type, caught.exception.non_retryable), ("AgentInterrupted", False))
 
     async def test_a_failing_agent_is_not_retried(self):
         await self.setup_repo("exit 3")
@@ -224,10 +233,10 @@ class RecordOutcomeTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_timeout_is_interrupted_only_if_the_machine_slept(self):
         log = str(self.acts.settings.state / "run.log")
-        plain = await self.record("failed", "a", timed_out=True, log=log)
+        plain = await self.record("failed", "a", timed_out=True, log=log, budget_minutes=90)
         self.assertEqual((plain.outcome, plain.consecutive_failures), ("failed", 1))
-        slept_marker(log).write_text("600\n")
-        slept = await self.record("failed", "b", timed_out=True, log=log)
+        slept_marker(log).write_text(json.dumps({"slept": 1800, "awake": 3600}))
+        slept = await self.record("failed", "b", timed_out=True, log=log, budget_minutes=90)
         self.assertEqual((slept.outcome, slept.consecutive_failures), ("interrupted", 1))
 
     async def test_a_retried_record_is_written_once(self):
@@ -242,7 +251,54 @@ class RecordOutcomeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.record("done", "2")).consecutive_failures, 0)
 
 
+class SleepEvidenceTest(unittest.TestCase):
+    def test_a_noticed_sleep_is_written_with_the_awake_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            log = str(Path(tmp) / "run.log")
+            watch = process.SleepWatch()
+            watch.wall -= 900  # as if 15 minutes of wall time passed while the monotonic clock stood still
+            agent._note_sleep(watch, log)
+            seen = json.loads(slept_marker(log).read_text())
+            self.assertGreater(seen["slept"], 800)
+            self.assertLess(seen["awake"], 5)
+
+    def test_a_retry_in_the_same_worker_sees_a_sleep_the_killed_attempt_missed(self):
+        env = ActivityEnvironment()
+        last = {"worker": os.getpid(), "wall": time.time() - 900, "mono": time.monotonic()}
+        env.info = env.info.__class__(**{**env.info.__dict__, "heartbeat_details": [last]})
+        watch = env.run(agent._resume_watch)
+        self.assertGreater(watch.tick(), 800)
+        other = {**last, "worker": os.getpid() + 1}  # another process: its monotonic clock means nothing here
+        env.info = env.info.__class__(**{**env.info.__dict__, "heartbeat_details": [other]})
+        self.assertEqual(env.run(agent._resume_watch).tick(), 0.0)
+
+    def test_a_sleep_excuses_a_timeout_only_if_it_ate_into_the_budget(self):
+        from engine.activities.teams import slept_in_budget
+
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "m"
+            marker.write_text(json.dumps({"slept": 1200, "awake": 60 * 80}))
+            self.assertTrue(slept_in_budget(marker, 90))  # awake 80 of 90 minutes: the sleep made it time out
+            marker.write_text(json.dumps({"slept": 120, "awake": 60 * 95}))
+            self.assertFalse(slept_in_budget(marker, 90))  # awake past the budget: a hang, not the nap
+            self.assertFalse(slept_in_budget(Path(tmp) / "missing", 90))
+
+
 class ProcessTest(unittest.TestCase):
+    def test_a_group_whose_leader_exited_is_still_stopped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            worktree = Path(tmp)
+            leader = subprocess.Popen(["sh", "-c", "sleep 60 & echo $!; exit 0"], stdout=subprocess.PIPE, text=True,
+                                      start_new_session=True)
+            child = int(leader.stdout.readline())
+            leader.wait()
+            self.addCleanup(lambda: process.group_alive(leader.pid) and os.killpg(leader.pid, signal.SIGKILL))
+            (worktree / process.PIDFILE).parent.mkdir(parents=True)
+            (worktree / process.PIDFILE).write_text(json.dumps({"pid": leader.pid, "started": "Fri Nov 13 00:00:00 2026"}))
+            self.assertEqual(process.kill_stale(worktree, grace=2), leader.pid)
+            time.sleep(0.3)
+            self.assertIsNone(process.started_at(child), "the leader's child kept running")
+
     def test_a_reused_pid_is_not_killed(self):
         with tempfile.TemporaryDirectory() as tmp:
             worktree = Path(tmp)

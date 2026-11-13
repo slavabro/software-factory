@@ -89,6 +89,48 @@ class EngineInstallTest(unittest.TestCase):
         self.assertGreaterEqual(spec["ExitTimeOut"], 10 + 30)
         self.assertIn("PATH", spec["EnvironmentVariables"])
 
+    def test_repos_are_stored_absolute_unless_typed_with_a_tilde(self):
+        engine.write_settings([".", "~/Dev/x"])
+        self.assertEqual(engine.settings()["repos"], [str(Path(".").resolve()), "~/Dev/x"])
+
+    def test_an_interrupted_environment_build_is_redone_not_used(self):
+        build = self.tmp / "b"
+        build.mkdir()
+        calls = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            if cmd[1:3] == ["-m", "venv"]:
+                (build / ".venv" / "bin").mkdir(parents=True)
+                (build / ".venv" / "bin" / "python").write_text("")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return subprocess.CompletedProcess(cmd, 1, "", "network down")  # pip fails
+
+        with mock.patch.object(engine, "_run", run), self.assertRaises(SystemExit):
+            engine.ensure_venv(build)
+        self.assertFalse((build / ".venv").exists())
+        with mock.patch.object(engine, "_run", lambda cmd, **kw: (run(cmd) if "venv" in cmd else
+                                                                   subprocess.CompletedProcess(cmd, 0, "", ""))):
+            python = engine.ensure_venv(build)
+        self.assertTrue((build / ".venv" / ".complete").is_file())
+        self.assertEqual(python, build / ".venv" / "bin" / "python")
+
+    def test_the_systemd_unit_lets_the_worker_stop_its_agents_and_quotes_paths(self):
+        spec = engine.worker_service("abc", Path("/b/my builds/abc"), Path("/b/my builds/abc/.venv/bin/python"))
+        unit = engine.systemd_unit("abc", spec)
+        self.assertIn("KillMode=mixed", unit)
+        self.assertIn('ExecStart="/b/my builds/abc/.venv/bin/python" "-m" "engine.worker"', unit)
+        self.assertIn('WorkingDirectory="/b/my builds/abc"', unit)
+        self.assertIn(f"TimeoutStopSec={engine.SHUTDOWN_ALLOWANCE}", unit)
+
+    def test_start_leaves_running_workers_alone(self):
+        engine.BUILDS.mkdir(parents=True)
+        (engine.BUILDS / "abc").mkdir()
+        with mock.patch.object(engine, "server_up"), mock.patch.object(engine, "_service_present", return_value=True), \
+             mock.patch.object(engine, "start_worker") as start:
+            engine.main(["start"])
+        start.assert_not_called()
+
     def test_engine_commands_need_an_install(self):
         with self.assertRaises(SystemExit) as caught:
             engine.main(["status"])

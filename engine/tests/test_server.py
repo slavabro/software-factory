@@ -96,6 +96,9 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(info.behavior, VersioningBehavior.PINNED.value)
             self.assertEqual(info.deployment_version.build_id, build)
             self.assertEqual(info.deployment_version.deployment_name, DEPLOYMENT)
+            self.assertEqual(await COMMANDS["drained"](self.client, self.settings, parser().parse_args(["drained", "--build-id", build])), 1)
+            never = f"never-{uuid.uuid4().hex[:6]}"
+            self.assertEqual(await COMMANDS["drained"](self.client, self.settings, parser().parse_args(["drained", "--build-id", never])), 0)
 
 
 if __name__ == "__main__":

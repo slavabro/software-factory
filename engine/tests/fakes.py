@@ -36,6 +36,8 @@ class Fakes:
         self.agent_started = asyncio.Event()
         self.agent_cancelled = False
         self.resolve_errors = 0  # resolve_team raises (non-retryable) this many times
+        self.resolve_holding = False
+        self.resolve_started = asyncio.Event()
         self.prepare_holding = False
         self.prepare_started = asyncio.Event()
         self.prepare_cancelled = False
@@ -46,6 +48,10 @@ class Fakes:
         @activity.defn(name="resolve_team")
         async def resolve_team(inp: ResolveInput) -> TeamPlan:
             f.calls.append("resolve_team")
+            f.resolve_started.set()
+            while f.resolve_holding:
+                activity.heartbeat()
+                await asyncio.sleep(0.05)
             if f.resolve_errors:
                 f.resolve_errors -= 1
                 raise ApplicationError("config unreadable", type="ConfigInvalid", non_retryable=True)

@@ -82,7 +82,10 @@ def kill_stale(worktree: Path, grace: float = KILL_GRACE) -> int | None:
     except (OSError, ValueError, KeyError, TypeError):
         return None
     killed = None
-    if record.get("started") and started_at(pid) == record["started"]:
+    now = started_at(pid)
+    same_leader = bool(record.get("started")) and now == record["started"]
+    leader_gone_group_left = now is None and group_alive(pid)  # its pid can't be reused while the group exists
+    if same_leader or leader_gone_group_left:
         kill_group(pid, grace)
         killed = pid
     path.unlink(missing_ok=True)
@@ -141,13 +144,21 @@ def stop(proc: subprocess.Popen[bytes] | None) -> None:
 
 class SleepWatch:
     """Notices that the machine slept: wall-clock time moves on during sleep, the monotonic clock does not (macOS,
-    and Linux's CLOCK_MONOTONIC). A gap of more than `threshold` seconds between the two counts as a sleep."""
+    and Linux's CLOCK_MONOTONIC). A gap of more than `threshold` seconds between the two counts as a sleep.
+    `since` resumes from a previous reading (another attempt in the same worker process: same monotonic clock)."""
 
-    def __init__(self, threshold: float = 60.0) -> None:
+    def __init__(self, threshold: float = 60.0, since: tuple[float, float] | None = None) -> None:
         self.threshold = threshold
-        self.wall = time.time()
-        self.mono = time.monotonic()
+        self.wall, self.mono = since or (time.time(), time.monotonic())
+        self.start_mono = time.monotonic()
         self.slept = 0.0
+
+    @property
+    def awake(self) -> float:
+        return time.monotonic() - self.start_mono
+
+    def reading(self) -> tuple[float, float]:
+        return self.wall, self.mono
 
     def tick(self) -> float:
         """Seconds slept since the last tick (0 when none)."""

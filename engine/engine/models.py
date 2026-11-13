@@ -84,8 +84,9 @@ class OutcomeInput(BaseModel):
     outcome: Outcome
     summary: str
     reasons: list[Reason]
-    timed_out: bool = False  # a step timed out: interrupted if the machine slept during the run, else failed
+    timed_out: bool = False  # a step timed out: interrupted if a sleep ate into the budget, else failed
     log: str | None = None  # the run's log; a sleep leaves a marker next to it
+    budget_minutes: int = 0
 
 
 class OutcomeResult(BaseModel):

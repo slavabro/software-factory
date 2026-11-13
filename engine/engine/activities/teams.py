@@ -69,6 +69,16 @@ async def wake(client: Client, settings: EngineSettings, inp: WakeTeamInput) -> 
     return WakeTeamResult(woken=True)
 
 
+def slept_in_budget(marker: Path, budget_minutes: int) -> bool:
+    """The machine slept during the attempt that timed out, and was awake for less than the budget: without the
+    sleep it would not have timed out. A hang after an early nap is still a failure."""
+    try:
+        seen = json.loads(marker.read_text())
+        return int(seen["slept"]) > 0 and int(seen["awake"]) < budget_minutes * 60
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+
+
 class TeamActivities:
     def __init__(self, client: Client, settings: EngineSettings) -> None:
         self.client = client
@@ -94,7 +104,7 @@ class TeamActivities:
         key = activity_idempotency_key()
         team_dir = self._team_dir(inp.ref)
         outcome = inp.outcome
-        if inp.timed_out and inp.log and slept_marker(inp.log).is_file():
+        if inp.timed_out and inp.log and slept_in_budget(slept_marker(inp.log), inp.budget_minutes):
             outcome = "interrupted"
 
         def write() -> tuple[int, bool]:

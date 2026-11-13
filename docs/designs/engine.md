@@ -76,11 +76,11 @@ per key, which is what makes "one run at a time per team per repo" hold.
 |------|----------|--------------------|------------------------|
 | budget | `check_budget` | 30 s, 3 attempts | read only; answers `go`, `wait_until <time>` or `stop` (F-41 plan limits, spend switch) |
 | wait | durable `workflow.sleep` until the window reopens | — | a timer; no worker held |
-| prepare | `prepare_worktree` | 5 min, 3 attempts | path and branch come from the run (below); an existing worktree is reused, and a stale agent left in it is killed first |
-| work | `run_agent_session` | start-to-close = team budget (default 90 min), schedule-to-close = budget + 30 min, heartbeat every 30 s, heartbeat timeout 3 min, 2 attempts, cancellation type `WAIT_CANCELLATION_COMPLETED`; non-retryable: `AgentRefused`, `NothingToDo` | heartbeat details carry the session id and log offset; one agent per worktree (lock + pidfile) |
+| prepare | `prepare_worktree` | 35 min (the repo's own setup may take 30), heartbeats, 3 attempts, `WAIT_CANCELLATION_COMPLETED` | runs in a child process killed as a group on cancel (setup included); a complete worktree on the run's branch is reused, anything else at that path is replaced; a stale agent left in it is stopped first; a failure a retry can fix (network, a flaky setup) raises and is retried, while not opted in or an invalid config ends the run |
+| work | `run_agent_session` | start-to-close = team budget (default 90 min), schedule-to-close = budget + 30 min, heartbeat every 30 s, heartbeat timeout 3 min, 2 attempts, `WAIT_CANCELLATION_COMPLETED`; non-retryable: `AgentFailed` (the agent exited non-zero), `AgentMissing` | one session per worktree (an exclusive lock); the pidfile records pid and start time, so a stale agent is stopped and a reused pid never is |
 | deliver | `deliver_report` | 5 min, 5 attempts, backoff | collects the run's digest and sends it (`[report] with`); the PRs themselves are opened by the agent's skill through the repo's own landing, as in any run, on branches under the run's branch name |
-| record | `append_notebook` | 1 min, 5 attempts | keyed by `activity_idempotency_key()`; a repeat write is skipped |
-| clean | `remove_worktree` | 5 min, 3 attempts | runs in `finally` (after a cancel too); a missing worktree is success |
+| record | `record_outcome` | 1 min, 5 attempts | keyed by `activity_idempotency_key()`: state (failures in a row) written atomically first, then the notebook entry; a repeat is skipped, but the pause after three failures is attempted on every try |
+| clean | `remove_worktree` | 5 min, 3 attempts | runs in `finally` (after a cancel too); stops any agent still in the worktree first; keeps unpushed work; a missing worktree is success |
 
 **Names.** Branch `factory/<team>/<YYYYMMDD>-<run id first 8>`, worktree under
 `~/.local/state/software-factory/worktrees/<repo>/<team>/` with the same suffix: unique even if a workflow is
@@ -95,15 +95,19 @@ terminated and started again.
 - heartbeats every 30 s with progress, which is also how a cancel reaches it, and kills the process group on cancel,
   finishing only when it is gone (`WAIT_CANCELLATION_COMPLETED`), so `clean` never removes a worktree under a live
   agent;
-- a timeout that spans a sleep anyway (lid closed on battery) is recorded as **interrupted**, retried, and not
-  counted as a failure.
+- a timeout during which the machine slept anyway (lid closed on battery) is recorded as **interrupted** and not
+  counted as a failure. The evidence is a sleep the session noticed (wall-clock time moved on, the monotonic clock
+  did not) and marked next to the run's log; any other timeout (a hung or over-budget agent) is a failure.
+
+**A run that breaks outside the agent** (its config unreadable, a step that gave up) is recorded as failed when
+possible, and wakes that arrived meanwhile still get their run: the workflow never fails and loses them.
 
 **Large output stays out of history:** logs, diffs and the notebook live on disk and in the repo; payloads carry
 paths and short summaries.
 
 **Decisions don't hold the team.** When a run needs the principal (an ASK merge, a risky change), it delivers what
 it has (PR or task), files the question with options and a recommendation (the tower now, the decision queue
-F-13 later), and ends. The answer comes back as a wake with reason `decision` and the choice in `details`.
+F-13 later), and ends. The answer comes back as a wake: `factory engine signal decision --team T --details …`.
 
 ### `ScheduleTick`: the bridge from a Schedule to the team
 
@@ -138,15 +142,20 @@ and the support desk (F-24). Without `--team`, every team whose `wake_on` in `.f
 Every workflow type (`TeamWorkflow`, `ScheduleTick`) is **Pinned**: a run finishes on the code it started with,
 so changing workflow code never breaks a run in flight and needs no patching.
 
-- **Build ID** = a hash of `engine/`, `runtime/` and the engine's lockfile. A merge that changes none of them (docs,
-  skills) deploys nothing.
+- **Build ID** = a hash of the code the worker runs: `engine/`, `runtime/`, the factory package its activities use
+  (`plugins/factory/sfactory`) and the engine's lockfile. A merge that changes none of them (docs, skills) deploys
+  nothing.
+- **Each build is frozen:** its committed code is copied to `~/.local/share/software-factory/engine/builds/<build>`
+  with its own virtualenv and its own worker service, so restarting a worker never runs another build's code.
 - **Upgrade** (`factory engine upgrade`, run by the self-update when the Build ID changes): start a worker on the
   new Build ID next to the old one, set it **Current** in Worker Deployment `factory-engine`, then stop the old
-  worker once the server reports nothing pinned to it is still open. Runs are bounded by their budget, so the old
-  worker drains within about two hours. This is the rainbow deployment Worker Versioning requires (rolling
+  worker once the server reports it drained (nothing pinned to it still open; the server re-checks every few
+  minutes). Runs are bounded by their budget, so an old worker is retired at the first upgrade after its longest
+  run (budget + 30 min) ends. This is the rainbow deployment Worker Versioning requires (rolling
   replacement isn't supported).
 - **First install** sets the first version Current; without that, no workflow tasks reach a versioned worker.
-- **Replay tests** in CI run recorded histories of each workflow type against the new code before it can merge.
+- **Replay tests** in CI replay each workflow's history on the code that produced it, which catches workflow code
+  that isn't deterministic. Old histories never meet new code: they are pinned to their own build.
 
 ## 7. Observability and failure
 
@@ -163,12 +172,12 @@ launchd schedule (`factory schedule`) is removed in the same change, so there is
 
 ## 9. Tests
 
-- **Time-skipping** (runtime's `make_worker`, `time_skipping_env`): dedupe and merging of wakes; one run at a time;
-  continue-as-new when wakes arrived mid-run and completion when none did; a signal racing completion is still
-  processed; budget wait on a durable timer; cancel reaching the agent activity and `clean` running after it.
+- **Time-skipping** (runtime's `make_worker`, `time_skipping_env`): dedupe and merging of wakes, including across
+  continue-as-new; completion when none arrived; budget wait on a durable timer; a cancel during prepare or the
+  session, waited for, then `clean`; a run that breaks outside the agent recorded, with later wakes still run.
 - **Activities** (`ActivityEnvironment`): worktree reuse and stale-agent kill, lock; PR lookup ignores closed PRs;
   notebook idempotency; heartbeat details on resume; interrupted vs failed classification.
-- **Replay:** recorded histories of each workflow type against the current code.
+- **Replay:** each workflow type's history replays on the same code (nondeterministic workflow code fails).
 - **End to end** against the real Docker server in CI: install, wake, run a fake team, see the PR step called,
   upgrade to a new Build ID and see the old worker drain.
 

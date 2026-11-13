@@ -46,6 +46,8 @@ def classify(error: ActivityError) -> tuple[Outcome, str, bool]:
         return "failed", f"timed out ({cause.type.name.lower() if cause.type else 'unknown'})", True
     if isinstance(cause, CancelledError):
         return "skipped", "cancelled", False
+    if isinstance(cause, ApplicationError) and cause.type == "AgentInterrupted":
+        return "interrupted", cause.message[:500], False
     return "failed", (cause.message if isinstance(cause, ApplicationError) else str(cause or error))[:500], False
 
 
@@ -54,6 +56,7 @@ class TeamWorkflow:
     @workflow.init
     def __init__(self, inp: TeamInput) -> None:
         self.pending: list[Wake] = list(inp.pending)
+        self.budget_minutes = 0
         self.seen: list[str] = list(inp.seen)
         self.state = "waiting"
 
@@ -78,6 +81,9 @@ class TeamWorkflow:
         try:
             result = await self._run_once(inp, wakes)
         except ActivityError as e:
+            if isinstance(e.cause, CancelledError):  # cancelled while resolving or checking the budget
+                await self._record(inp, "skipped", "cancelled", sorted({w.reason for w in wakes}))
+                raise asyncio.CancelledError() from None
             # A step outside the agent's (resolve, budget, clean, record) gave up. Record it if possible, and still
             # carry pending wakes on below rather than failing the workflow and losing them.
             outcome, summary, timed_out = classify(e)
@@ -131,6 +137,7 @@ class TeamWorkflow:
         summary = ""
         cancelled = timed_out = False
         log = plan.paths.log
+        self.budget_minutes = plan.budget_minutes
         try:
             self.state = "preparing"
             prepared = await workflow.execute_activity(
@@ -206,7 +213,7 @@ class TeamWorkflow:
         recorded: OutcomeResult = await workflow.execute_activity(
             "record_outcome",
             OutcomeInput(ref=inp.ref, run_id=workflow.info().run_id, outcome=outcome, summary=summary, reasons=reasons,
-                         timed_out=timed_out, log=log),
+                         timed_out=timed_out, log=log, budget_minutes=self.budget_minutes),
             result_type=OutcomeResult,
             start_to_close_timeout=timedelta(minutes=1),
             retry_policy=PATIENT,

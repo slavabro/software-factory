@@ -142,6 +142,16 @@ class MoreWorkflowTest(Base):
         self.assertNotIn("run_agent_session", self.fakes.calls)
         self.assertEqual(self.fakes.calls[-2:], ["remove_worktree", "record_outcome"])
 
+    async def test_a_cancel_while_resolving_ends_cancelled(self):
+        self.fakes.resolve_holding = True
+        handle = await self.wake("tick-1")
+        await self.fakes.resolve_started.wait()
+        await handle.cancel()
+        with self.assertRaises(WorkflowFailureError):
+            await handle.result()
+        self.assertEqual((await handle.describe()).status, WorkflowExecutionStatus.CANCELED)
+        self.assertEqual([(o.outcome, o.summary) for o in self.fakes.outcomes], [("skipped", "cancelled")])
+
     async def test_seen_event_ids_survive_continue_as_new(self):
         self.fakes.holding = True
         await self.wake("tick-1")
@@ -198,6 +208,10 @@ class ClassifyTest(unittest.TestCase):
         """record_outcome decides: interrupted only if the machine slept (tests/test_activities.py)."""
         timeout = TimeoutError("heartbeat", type=TimeoutType.HEARTBEAT, last_heartbeat_details=[])
         self.assertEqual(classify(self.error(timeout)), ("failed", "timed out (heartbeat)", True))
+
+    def test_an_agent_stopped_by_a_signal_is_interrupted(self):
+        cause = ApplicationError("the agent was stopped by signal 15", type="AgentInterrupted")
+        self.assertEqual(classify(self.error(cause))[0], "interrupted")
 
     def test_anything_else_is_failed_with_its_message(self):
         self.assertEqual(classify(self.error(ApplicationError("the agent exited with 2"))),

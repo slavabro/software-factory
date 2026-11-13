@@ -84,6 +84,7 @@ async def prepare_worktree(inp: StepInput) -> StepResult:
             await asyncio.wait({task}, timeout=HEARTBEAT_EVERY)
     except asyncio.CancelledError:
         await asyncio.to_thread(process.kill_group, proc.pid)
+        task.cancel()
         raise
     out, err = task.result()
     if proc.returncode:

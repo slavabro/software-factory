@@ -48,16 +48,29 @@ def _sh(cmd: str | list[str], cwd: Path, env: dict, log, timeout: float | None =
     try:
         return proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGTERM)
-        try:
-            proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
+        _stop_group(proc)
         log.write(f"\nfactory: timed out after {timeout:.0f}s; process group killed\n")
         return _TIMED_OUT
     except BaseException:
-        os.killpg(proc.pid, signal.SIGTERM)  # our own SIGTERM/^C: take the agent down with us
+        _stop_group(proc)  # our own SIGTERM/^C: take the child's whole group down with us, for good
         raise
+
+
+def _stop_group(proc: subprocess.Popen, grace: float | None = None) -> None:
+    """TERM the child's process group, wait up to `grace` seconds (FACTORY_STOP_GRACE, default 30), then KILL what
+    ignored it."""
+    grace = float(os.environ.get("FACTORY_STOP_GRACE", 30)) if grace is None else grace
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=grace)
+    except subprocess.TimeoutExpired:
+        pass
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 def agent_argv(cfg: Config, prompt: str) -> list[str]:

@@ -12,6 +12,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -30,7 +32,24 @@ SLEPT_SUFFIX = ".slept"
 
 
 def slept_marker(log: str) -> Path:
+    """Next to the run's log: {"slept": seconds, "awake": seconds} of the latest attempt that noticed a sleep."""
     return Path(log + SLEPT_SUFFIX)
+
+
+def _note_sleep(watch: process.SleepWatch, log: str) -> None:
+    watch.tick()
+    if watch.slept:
+        slept_marker(log).write_text(json.dumps({"slept": int(watch.slept), "awake": int(watch.awake)}))
+
+
+def _resume_watch() -> process.SleepWatch:
+    """A previous attempt in this same worker process left its last clock reading in its heartbeat: compare from
+    there, so a sleep that killed that attempt before it could notice is still seen."""
+    details = activity.info().heartbeat_details
+    last = details[0] if details else None
+    if isinstance(last, dict) and last.get("worker") == os.getpid() and "wall" in last and "mono" in last:
+        return process.SleepWatch(since=(float(last["wall"]), float(last["mono"])))
+    return process.SleepWatch()
 
 
 @activity.defn(name="run_agent_session")
@@ -53,7 +72,7 @@ async def run_agent_session(inp: StepInput) -> StepResult:
     argv, env = invocation
 
     lock = process.WorktreeLock(worktree)
-    stale = await asyncio.to_thread(process.kill_stale, worktree)  # frees a lock a dead worker's agent held
+    stale = await asyncio.to_thread(process.kill_stale, worktree)  # an agent a dead worker or attempt left running
     if not await asyncio.to_thread(lock.acquire, LOCK_WAIT):
         raise ApplicationError(f"another session holds {worktree}", type="WorktreeBusy")
     out_path = runner.agent_output_path(Path(inp.paths.log))
@@ -68,7 +87,7 @@ async def run_agent_session(inp: StepInput) -> StepResult:
             )
         await asyncio.to_thread(process.write_pidfile, worktree, proc.pid)
         awake = process.keep_awake(proc.pid)
-        watch = process.SleepWatch()
+        watch = _resume_watch()
         started = time.time()
         try:
             while True:
@@ -76,19 +95,25 @@ async def run_agent_session(inp: StepInput) -> StepResult:
                     code = await asyncio.wait_for(proc.wait(), timeout=HEARTBEAT_EVERY)
                     break
                 except asyncio.TimeoutError:
-                    slept = watch.tick()
-                    if slept:
-                        slept_marker(inp.paths.log).write_text(f"{int(slept)}\n")
+                    _note_sleep(watch, inp.paths.log)
                     size = out_path.stat().st_size if out_path.exists() else 0
-                    activity.heartbeat({"pid": proc.pid, "output_bytes": size, "seconds": int(time.time() - started)})
+                    wall, mono = watch.reading()
+                    activity.heartbeat({"pid": proc.pid, "output_bytes": size, "seconds": int(time.time() - started),
+                                        "worker": os.getpid(), "wall": wall, "mono": mono})
         except asyncio.CancelledError:
+            _note_sleep(watch, inp.paths.log)  # a cancel right after waking: still see the sleep
             await asyncio.to_thread(process.kill_group, proc.pid)
             raise
         finally:
+            _note_sleep(watch, inp.paths.log)
+            # Background processes the agent left behind (a dev server, a watcher) go with the session.
+            await asyncio.to_thread(process.kill_group, proc.pid, 10.0)
             await asyncio.to_thread(process.clear_pidfile, worktree, proc.pid)
             await asyncio.to_thread(process.stop, awake)
     finally:
         lock.release()
+    if code < 0:  # killed by a signal: a shutdown, a reboot, a stop — not the agent's own failure, worth a retry
+        raise ApplicationError(f"the agent was stopped by signal {-code}; output {out_path}", type="AgentInterrupted")
     if code != 0:
         raise ApplicationError(f"the agent exited with {code}; output {out_path}", type="AgentFailed", non_retryable=True)
     return StepResult(ok=True, message=f"agent finished in {int(time.time() - started) // 60} min")

@@ -11,13 +11,14 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from temporalio.api.enums.v1 import VersionDrainageStatus
+from temporalio.api.enums.v1 import VersionDrainageStatus, WorkerDeploymentVersionStatus
 from temporalio.api.workflowservice.v1 import (
     DescribeWorkerDeploymentVersionRequest,
     SetWorkerDeploymentCurrentVersionRequest,
 )
 from temporalio.client import Client, WorkflowExecutionStatus
 from temporalio.common import WorkerDeploymentVersion
+from temporalio.service import RPCError, RPCStatusCode
 
 from factory_runtime.temporal import get_client, get_run_failure
 from engine import schedules, settings as settings_mod
@@ -126,15 +127,25 @@ async def cmd_set_current(client: Client, settings: EngineSettings, a: argparse.
 
 
 async def cmd_drained(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
-    """Exit 0 when nothing open is pinned to the build (its worker may stop), 1 while runs remain."""
+    """Exit 0 when the build's worker may stop: drained, unknown to the server, or never current and nothing pinned
+    to it. Exit 1 while it is current or runs remain pinned to it."""
     version = WorkerDeploymentVersion(deployment_name=DEPLOYMENT, build_id=a.build_id)
-    resp = await client.workflow_service.describe_worker_deployment_version(
-        DescribeWorkerDeploymentVersionRequest(namespace=NAMESPACE, deployment_version=version._to_proto())
-    )
-    status = resp.worker_deployment_version_info.drainage_info.status
-    drained = status == VersionDrainageStatus.VERSION_DRAINAGE_STATUS_DRAINED
-    print(f"{DEPLOYMENT} build {a.build_id}: {VersionDrainageStatus.Name(status).removeprefix('VERSION_DRAINAGE_STATUS_').lower()}")
-    return 0 if drained else 1
+    try:
+        resp = await client.workflow_service.describe_worker_deployment_version(
+            DescribeWorkerDeploymentVersionRequest(namespace=NAMESPACE, deployment_version=version._to_proto())
+        )
+    except RPCError as e:
+        if e.status == RPCStatusCode.NOT_FOUND:
+            print(f"{DEPLOYMENT} build {a.build_id}: unknown to the server (never ran)")
+            return 0
+        raise
+    info = resp.worker_deployment_version_info
+    status = info.drainage_info.status
+    name = VersionDrainageStatus.Name(status).removeprefix("VERSION_DRAINAGE_STATUS_").lower()
+    current = info.status == WorkerDeploymentVersionStatus.WORKER_DEPLOYMENT_VERSION_STATUS_CURRENT
+    never_routed = status == VersionDrainageStatus.VERSION_DRAINAGE_STATUS_UNSPECIFIED and not info.HasField("current_since_time")
+    print(f"{DEPLOYMENT} build {a.build_id}: {'current' if current else name}{' (never current)' if never_routed else ''}")
+    return 0 if not current and (status == VersionDrainageStatus.VERSION_DRAINAGE_STATUS_DRAINED or never_routed) else 1
 
 
 def parser() -> argparse.ArgumentParser:
