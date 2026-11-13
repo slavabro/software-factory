@@ -54,6 +54,14 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         report = await schedules.reconcile(self.client, self.settings)
         self.assertIn("deleted schedule/demo/qa (no longer in config)", report)
 
+    async def test_a_repo_without_a_factory_toml_gets_no_schedules(self):
+        from tests.repo_fixture import git
+
+        (self.repo / ".factory.toml").unlink()
+        git("commit", "-qam", "opt out", cwd=self.repo)
+        git("push", "-q", "origin", "main", cwd=self.repo)
+        self.assertEqual(await schedules.reconcile(self.client, self.settings), [])
+
     async def test_a_paused_team_is_not_woken_except_by_hand(self):
         await schedules.reconcile(self.client, self.settings)  # created paused
         held = await wake(self.client, self.settings, WakeTeamInput(ref=self.ref, wake=Wake(reason="ci_red", event_id="e1")))

@@ -50,7 +50,8 @@ class EngineSettings:
         return [Path(r).expanduser().resolve() for r in self.repos]
 
 
-def load(path: Path = CONFIG_PATH) -> EngineSettings:
+def load(path: Path | None = None) -> EngineSettings:
+    path = path or CONFIG_PATH
     if not path.is_file():
         return EngineSettings()
     raw = tomllib.loads(path.read_text())

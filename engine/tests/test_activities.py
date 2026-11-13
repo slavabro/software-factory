@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import tempfile
+import json
 import signal
 import subprocess
 import time
@@ -14,13 +16,24 @@ from unittest import mock
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
+from engine import process
 from engine import settings as settings_mod
 from engine.activities import agent, repo as repo_acts
 from engine.activities.teams import TeamActivities
 from engine.models import OutcomeInput, ResolveInput, StepInput, TeamRef
+from engine.activities.agent import slept_marker
 from engine.settings import EngineSettings
 from engine.worker import build_id
 from tests.repo_fixture import make_repo
+
+
+def json_pid(worktree: Path):
+    try:
+        import json
+
+        return json.loads((worktree / process.PIDFILE).read_text())["pid"]
+    except (OSError, ValueError):
+        return None
 
 
 def alive_group(pid: int) -> bool:
@@ -70,6 +83,58 @@ class RepoActivitiesTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((plan.enabled, plan.prompt), (True, "/factory:upgrade"))
 
 
+class PrepareTest(unittest.IsolatedAsyncioTestCase):
+    async def test_cancel_kills_the_setup_it_is_running(self):
+        marker = Path(tempfile.mkdtemp()) / "setup-pid"
+        self.addCleanup(lambda: marker.parent.exists() and __import__("shutil").rmtree(marker.parent))
+        repo, _, tmp = make_repo("true", extra_toml=f'\n[worktree]\nsetup = ["echo $$ > {marker}; sleep 60"]\n')
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.environ.pop, "FACTORY_ENGINE_STATE", None)
+        ref = TeamRef(repo=str(repo), repo_name="demo", team="qa")
+        env = ActivityEnvironment()
+        plan = await env.run(repo_acts.resolve_team, ResolveInput(ref=ref, run_id="cafe1234", day="20261113"))
+        step = StepInput(ref=ref, paths=plan.paths, prompt=plan.prompt)
+        with mock.patch.object(process, "KILL_GRACE", 2.0):
+            task = asyncio.create_task(env.run(repo_acts.prepare_worktree, step))
+            for _ in range(100):
+                await asyncio.sleep(0.1)
+                if marker.exists() and marker.read_text().strip():
+                    break
+            setup_pid = int(marker.read_text())
+            env.cancel()
+            with self.assertRaises(BaseException):
+                await task
+        await asyncio.sleep(0.5)
+        self.assertIsNone(process.started_at(setup_pid), "the setup kept running after the cancel")
+
+    async def test_a_failed_fetch_raises_to_be_retried_and_not_opted_in_does_not(self):
+        repo, _, tmp = make_repo("true")
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.environ.pop, "FACTORY_ENGINE_STATE", None)
+        ref = TeamRef(repo=str(repo), repo_name="demo", team="qa")
+        env = ActivityEnvironment()
+        plan = await env.run(repo_acts.resolve_team, ResolveInput(ref=ref, run_id="beef5678", day="20261113"))
+        step = StepInput(ref=ref, paths=plan.paths, prompt=plan.prompt)
+        subprocess.run(["git", "remote", "set-url", "origin", "/nonexistent"], cwd=repo, check=True)
+        with self.assertRaises(ApplicationError) as caught:
+            await env.run(repo_acts.prepare_worktree, step)
+        self.assertEqual((caught.exception.type, caught.exception.non_retryable), ("PrepareFailed", False))
+
+    async def test_an_incomplete_worktree_is_replaced_not_reused(self):
+        repo, _, tmp = make_repo("true")
+        self.addCleanup(tmp.cleanup)
+        self.addCleanup(os.environ.pop, "FACTORY_ENGINE_STATE", None)
+        ref = TeamRef(repo=str(repo), repo_name="demo", team="qa")
+        env = ActivityEnvironment()
+        plan = await env.run(repo_acts.resolve_team, ResolveInput(ref=ref, run_id="f00d9abc", day="20261113"))
+        Path(plan.paths.worktree).mkdir(parents=True)  # what a worktree add that died half way leaves
+        (Path(plan.paths.worktree) / "junk").write_text("x")
+        result = await env.run(repo_acts.prepare_worktree, StepInput(ref=ref, paths=plan.paths, prompt=plan.prompt))
+        self.assertTrue(result.ok)
+        self.assertTrue((Path(plan.paths.worktree) / ".factory.toml").is_file())
+        self.assertFalse((Path(plan.paths.worktree) / "junk").exists())
+
+
 class AgentSessionTest(unittest.IsolatedAsyncioTestCase):
     async def setup_repo(self, script: str):
         self.repo, self.state, tmp = make_repo(script)
@@ -92,28 +157,28 @@ class AgentSessionTest(unittest.IsolatedAsyncioTestCase):
         worktree = await self.setup_repo("sleep 60 & sleep 60; wait")
         beats = []
         self.env.on_heartbeat = lambda *d: beats.append(d)
-        with mock.patch.object(agent, "HEARTBEAT_EVERY", 0.2), mock.patch.object(agent, "KILL_GRACE", 2.0):
+        with mock.patch.object(agent, "HEARTBEAT_EVERY", 0.2), mock.patch.object(process, "KILL_GRACE", 2.0):
             task = asyncio.create_task(self.env.run(agent.run_agent_session, self.step))
             for _ in range(50):
                 await asyncio.sleep(0.1)
-                if (worktree / agent.PIDFILE).exists() and beats:
+                if (worktree / process.PIDFILE).exists() and beats:
                     break
-            pid = int((worktree / agent.PIDFILE).read_text())
+            pid = json_pid(worktree)
             self.assertTrue(alive_group(pid))
             self.env.cancel()
             with self.assertRaises(BaseException):
                 await task
         self.assertFalse(alive_group(pid), "the agent's process group outlived the cancel")
-        self.assertFalse((worktree / agent.PIDFILE).exists())
+        self.assertEqual(json_pid(worktree), None)
+        self.assertFalse((worktree / process.PIDFILE).exists())
         self.assertIn("pid", beats[0][0])
 
     async def test_a_stale_agent_from_a_dead_worker_is_stopped_first(self):
         worktree = await self.setup_repo("true")
         stale = subprocess.Popen(["sleep", "60"], start_new_session=True)
         self.addCleanup(lambda: stale.poll() is None and stale.kill())
-        (worktree / agent.PIDFILE).parent.mkdir(parents=True, exist_ok=True)
-        (worktree / agent.PIDFILE).write_text(str(stale.pid))
-        with mock.patch.object(agent, "KILL_GRACE", 2.0):
+        process.write_pidfile(worktree, stale.pid)
+        with mock.patch.object(process, "KILL_GRACE", 2.0):
             await self.env.run(agent.run_agent_session, self.step)
         stale.wait(timeout=5)
         self.assertIn("stopped a stale agent", Path(self.step.paths.log).read_text())
@@ -132,11 +197,11 @@ class RecordOutcomeTest(unittest.IsolatedAsyncioTestCase):
         self.acts = TeamActivities(client, EngineSettings(state=Path(tmp.name)))
         self.ref = TeamRef(repo="/r", repo_name="demo", team="qa")
 
-    async def record(self, outcome: str, activity_id: str) -> object:
+    async def record(self, outcome: str, activity_id: str, **extra) -> object:
         env = ActivityEnvironment()
         env.info = env.info.__class__(**{**env.info.__dict__, "activity_id": activity_id})
         return await env.run(self.acts.record_outcome, OutcomeInput(ref=self.ref, run_id="run", outcome=outcome,
-                                                                     summary="s", reasons=["schedule"]))
+                                                                     summary="s", reasons=["schedule"], **extra))
 
     async def test_three_failures_in_a_row_pause_the_schedule_and_others_do_not_count(self):
         for i, outcome in enumerate(["failed", "interrupted", "failed", "skipped"]):
@@ -145,6 +210,25 @@ class RecordOutcomeTest(unittest.IsolatedAsyncioTestCase):
         result = await self.record("failed", "9")
         self.assertEqual((result.consecutive_failures, result.paused), (3, True))
         self.assertIn("3 failed runs", self.handle.pause.await_args.kwargs["note"])
+
+    async def test_a_pause_that_failed_is_done_by_the_retry(self):
+        from temporalio.service import RPCError, RPCStatusCode
+
+        for i in range(2):
+            await self.record("failed", str(i))
+        self.handle.pause.side_effect = [RPCError("busy", RPCStatusCode.UNAVAILABLE, b""), None]
+        with self.assertRaises(RPCError):
+            await self.record("failed", "third")
+        result = await self.record("failed", "third")  # the activity's retry: same key
+        self.assertEqual((result.consecutive_failures, result.paused), (3, True))
+
+    async def test_a_timeout_is_interrupted_only_if_the_machine_slept(self):
+        log = str(self.acts.settings.state / "run.log")
+        plain = await self.record("failed", "a", timed_out=True, log=log)
+        self.assertEqual((plain.outcome, plain.consecutive_failures), ("failed", 1))
+        slept_marker(log).write_text("600\n")
+        slept = await self.record("failed", "b", timed_out=True, log=log)
+        self.assertEqual((slept.outcome, slept.consecutive_failures), ("interrupted", 1))
 
     async def test_a_retried_record_is_written_once(self):
         await self.record("failed", "same")
@@ -158,11 +242,54 @@ class RecordOutcomeTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.record("done", "2")).consecutive_failures, 0)
 
 
+class ProcessTest(unittest.TestCase):
+    def test_a_reused_pid_is_not_killed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            worktree = Path(tmp)
+            bystander = subprocess.Popen(["sleep", "60"], start_new_session=True)
+            self.addCleanup(lambda: bystander.poll() is None and bystander.kill())
+            (worktree / process.PIDFILE).parent.mkdir(parents=True)
+            (worktree / process.PIDFILE).write_text(json.dumps({"pid": bystander.pid, "started": "Mon Jan  1 00:00:00 2001"}))
+            self.assertIsNone(process.kill_stale(worktree, grace=1))
+            self.assertIsNone(bystander.poll(), "an unrelated process with a reused pid was killed")
+
+    def test_only_its_own_pidfile_is_cleared(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            worktree = Path(tmp)
+            process.write_pidfile(worktree, os.getpid())
+            process.clear_pidfile(worktree, 1)  # an older attempt's cleanup
+            self.assertTrue((worktree / process.PIDFILE).exists())
+            process.clear_pidfile(worktree, os.getpid())
+            self.assertFalse((worktree / process.PIDFILE).exists())
+
+    def test_one_session_per_worktree(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first, second = process.WorktreeLock(Path(tmp)), process.WorktreeLock(Path(tmp))
+            self.assertTrue(first.acquire(timeout=1))
+            self.assertFalse(second.acquire(timeout=0.5))
+            first.release()
+            self.assertTrue(second.acquire(timeout=1))
+            second.release()
+
+    def test_a_sleep_is_wall_time_the_monotonic_clock_did_not_see(self):
+        watch = process.SleepWatch(threshold=60)
+        with mock.patch.object(process.time, "time", return_value=watch.wall + 900), \
+             mock.patch.object(process.time, "monotonic", return_value=watch.mono + 30):
+            self.assertGreater(watch.tick(), 800)
+        self.assertEqual(process.SleepWatch().tick(), 0.0)
+
+
 class SpendSwitchTest(unittest.IsolatedAsyncioTestCase):
-    async def test_unattended_off_stops_runs(self):
-        acts = TeamActivities(mock.MagicMock(), EngineSettings(unattended=False))
-        answer = await ActivityEnvironment().run(acts.check_budget, TeamRef(repo="/r", repo_name="d", team="qa"))
-        self.assertEqual(answer.verdict, "stop")
+    async def test_the_switch_is_read_on_every_run(self):
+        acts = TeamActivities(mock.MagicMock(), EngineSettings())
+        ref = TeamRef(repo="/r", repo_name="d", team="qa")
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
+            f.write("unattended = false\n")
+        self.addCleanup(os.unlink, f.name)
+        with mock.patch.object(settings_mod, "CONFIG_PATH", Path(f.name)):
+            self.assertEqual((await ActivityEnvironment().run(acts.check_budget, ref)).verdict, "stop")
+            Path(f.name).write_text("unattended = true\n")
+            self.assertEqual((await ActivityEnvironment().run(acts.check_budget, ref)).verdict, "go")
 
 
 class BuildIdTest(unittest.TestCase):
@@ -171,7 +298,8 @@ class BuildIdTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            for rel in ("engine/engine/a.py", "runtime/factory_runtime/b.py", "engine/tests/t.py", "engine/engine/__pycache__/a.pyc"):
+            for rel in ("engine/engine/a.py", "runtime/factory_runtime/b.py", "plugins/factory/sfactory/c.py",
+                        "engine/tests/t.py", "engine/engine/__pycache__/a.pyc", "engine/infra/x.yml"):
                 (root / rel).parent.mkdir(parents=True, exist_ok=True)
                 (root / rel).write_text(rel)
             first = build_id(root)
@@ -180,7 +308,10 @@ class BuildIdTest(unittest.TestCase):
             (root / "docs/x.md").write_text("docs")
             self.assertEqual(build_id(root), first)
             (root / "engine/engine/a.py").write_text("changed")
-            self.assertNotEqual(build_id(root), first)
+            second = build_id(root)
+            self.assertNotEqual(second, first)
+            (root / "plugins/factory/sfactory/c.py").write_text("changed")  # the runner the activities use
+            self.assertNotEqual(build_id(root), second)
 
 
 class SettingsTest(unittest.TestCase):

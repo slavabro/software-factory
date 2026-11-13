@@ -239,15 +239,31 @@ def deliver(cfg: Config, report: Path, worktree: Path, env: dict, log_path: Path
             _sh(wcfg.report_with.replace("{file}", shlex.quote(str(report))), cfg.root, env, log, timeout=120)
 
 
-def prepare_worktree(cfg: Config, worktree: Path, branch: str, env: dict, log) -> tuple[int, Config | None]:
-    """Fresh worktree off the default branch (an existing one is reused), its config, then its setup.
-    Returns (0, the worktree's config) or (a failure code, None)."""
-    if worktree.is_dir():
+def _usable_worktree(worktree: Path, branch: str) -> bool:
+    """A complete worktree on `branch` (a directory left by a worktree add that died half way is not)."""
+    return _git(["rev-parse", "--abbrev-ref", "HEAD"], worktree) == branch
+
+
+def prepare_worktree(
+    cfg: Config, worktree: Path, branch: str, env: dict, log, reuse: bool = False
+) -> tuple[int, Config | None]:
+    """Fresh worktree off the default branch, its config, then its setup. With `reuse` (an engine retry of the same
+    run) a complete worktree on `branch` is kept, and anything else at that path is removed and recreated; without
+    it an existing path fails, as `factory run` always has. Returns (0, the worktree's config) or (code, None)."""
+    if reuse and worktree.is_dir() and _usable_worktree(worktree, branch):
         log.write(f"reusing worktree {worktree}\n")
-    elif _sh(["git", "fetch", "--quiet", "origin", cfg.default_branch], cfg.root, env, log) or _sh(
-        ["git", "worktree", "add", "--quiet", "-b", branch, str(worktree), f"origin/{cfg.default_branch}"], cfg.root, env, log
-    ):
-        return _NOT_CREATED, None
+    else:
+        if reuse and worktree.exists():
+            log.write(f"removing an incomplete worktree at {worktree}\n")
+            _sh(["git", "worktree", "remove", "--force", str(worktree)], cfg.root, env, log)
+            shutil.rmtree(worktree, ignore_errors=True)
+            _sh(["git", "worktree", "prune"], cfg.root, env, log)
+            _sh(["git", "branch", "-D", branch], cfg.root, env, log)
+        if _sh(["git", "fetch", "--quiet", "origin", cfg.default_branch], cfg.root, env, log) or _sh(
+            ["git", "worktree", "add", "--quiet", "-b", branch, str(worktree), f"origin/{cfg.default_branch}"],
+            cfg.root, env, log,
+        ):
+            return _NOT_CREATED, None
     # The run follows the default branch's config, not a possibly stale main checkout.
     if not (worktree / CONFIG_NAME).is_file():
         log.write(f"no {CONFIG_NAME} on origin/{cfg.default_branch}: repo not opted in\n")
@@ -284,7 +300,8 @@ def _prepare_and_run(cfg: Config, capability: str, worktree: Path, branch: str, 
         print(f"factory: {cfg.name} has no {CONFIG_NAME} on {cfg.default_branch} — not opted in; nothing to do")
         return code
     if code or wcfg is None:
-        print(f"factory: the run could not start ({'invalid config' if code == _INVALID_CONFIG else 'worktree setup failed'}) — see {log_path}")
+        why = "invalid config" if code == _INVALID_CONFIG else "worktree setup failed"
+        print(f"factory: the run could not start ({why}; the log has the details) — see {log_path}")
         return 1
     invocation = agent_invocation(wcfg, PROMPTS[capability], worktree, env)
     if invocation is None:

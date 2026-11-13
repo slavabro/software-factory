@@ -183,6 +183,11 @@ def load_ref(root: Path, ref: str) -> Config:
     return parse(root, shown.stdout if shown.returncode == 0 else None, Path(f"{ref}:{CONFIG_NAME}"))
 
 
+def committed(root: Path, ref: str) -> bool:
+    """Whether `ref` has a .factory.toml: a repo without one is not opted in to unattended factory work."""
+    return subprocess.run(["git", "cat-file", "-e", f"{ref}:{CONFIG_NAME}"], cwd=root, capture_output=True).returncode == 0
+
+
 def parse(root: Path, text: str | None, path: Path) -> Config:
     root = root.resolve()
     cfg = Config(root=root, name=root.name)

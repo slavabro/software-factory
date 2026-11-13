@@ -9,6 +9,7 @@ import json
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 from temporalio.api.enums.v1 import VersionDrainageStatus
 from temporalio.api.workflowservice.v1 import (
@@ -27,22 +28,38 @@ from engine.settings import DEPLOYMENT, NAMESPACE, EngineSettings
 from engine.worker import build_id
 
 
-def team_ref(repo: str, team: str) -> TeamRef:
+def _committed(repo: str) -> tuple[Path, str, Any]:
+    """The repo as its default branch configures it, the same view schedules and runs use (so workflow IDs agree)."""
     root = Path(repo).expanduser().resolve()
-    return TeamRef(repo=str(root), repo_name=config.load(root).name, team=team)
+    name, cfg = schedules.committed_config(root)
+    if cfg is None:
+        raise SystemExit(f"{root} is not opted in (no .factory.toml on its default branch)")
+    return root, name, cfg
+
+
+def team_ref(repo: str, team: str) -> TeamRef:
+    root, name, _ = _committed(repo)
+    return TeamRef(repo=str(root), repo_name=name, team=team)
 
 
 def teams_for(repo: str, reason: str) -> list[str]:
-    root = Path(repo).expanduser().resolve()
-    return sorted(name for name, team in config.load(root).teams().items() if reason in team.wake_on)
+    _, _, cfg = _committed(repo)
+    return sorted(name for name, team in cfg.teams().items() if reason in team.wake_on)
 
 
 async def cmd_signal(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
+    if a.reason == "decision" and not a.team:
+        raise SystemExit("a decision goes back to one team: give --team")
     teams = [a.team] if a.team else teams_for(a.repo, a.reason)
     if not teams:
         print(f"no team in {a.repo} wakes on {a.reason}")
         return 0
-    details = json.loads(a.details) if a.details else {}
+    try:
+        details = json.loads(a.details) if a.details else {}
+        if not isinstance(details, dict) or not all(isinstance(v, str) for v in details.values()):
+            raise ValueError
+    except ValueError:
+        raise SystemExit('--details must be a JSON object of strings, e.g. \'{"run": "123"}\'') from None
     for team in teams:
         ref = team_ref(a.repo, team)
         res = await wake(client, settings, WakeTeamInput(ref=ref, wake=Wake(reason=a.reason, event_id=a.event_id, details=details)))
@@ -85,7 +102,9 @@ async def cmd_status(client: Client, settings: EngineSettings, a: argparse.Names
         print(f"{wf.id}: running since {wf.start_time.isoformat(timespec='minutes')}")
     async for wf in client.list_workflows('WorkflowType = "TeamWorkflow" AND ExecutionStatus != "Running"', limit=a.recent):
         line = f"{wf.id}: {wf.status.name.lower() if wf.status else '?'} {wf.close_time.isoformat(timespec='minutes') if wf.close_time else ''}"
-        if wf.status == WorkflowExecutionStatus.COMPLETED:
+        if wf.status == WorkflowExecutionStatus.CONTINUED_AS_NEW:
+            line += " — continued with the wakes that arrived during the run"
+        elif wf.status == WorkflowExecutionStatus.COMPLETED:
             try:
                 result = await client.get_workflow_handle(wf.id, run_id=wf.run_id).result()
                 line += f" — {result.get('outcome', '?')}: {str(result.get('summary', ''))[:120]}"
@@ -122,7 +141,7 @@ def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="factory engine", description="The factory engine's commands")
     sub = p.add_subparsers(dest="command", required=True)
     s = sub.add_parser("signal", help="wake the teams that listen for an event")
-    s.add_argument("reason", choices=list(config.WAKE_REASONS))
+    s.add_argument("reason", choices=[*config.WAKE_REASONS, "decision"])
     s.add_argument("--repo", required=True)
     s.add_argument("--team")
     s.add_argument("--event-id", required=True)

@@ -1,0 +1,11 @@
+# The engine's Temporal server dynamic config (hot-reloaded). The server image refuses to start without one; keep it
+# close to the defaults and give each override a reason. https://docs.temporal.io/references/dynamic-configuration
+#
+# Worker heartbeating: the worker reports liveness and poller stats, so a dead worker shows in the UI's Workers page
+# and in `temporal worker list`.
+frontend.WorkerHeartbeatsEnabled:
+  - value: true
+    constraints: {}
+frontend.ListWorkersEnabled:
+  - value: true
+    constraints: {}

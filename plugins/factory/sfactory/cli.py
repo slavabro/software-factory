@@ -8,6 +8,7 @@
                                            which run the repo's [tasks] new / exists with every value quoted
     factory run CAPABILITY [--dry-run]     run a capability unattended in a fresh worktree (e.g. `upgrade`)
     factory schedule install|remove|show CAPABILITY [--print]
+    factory engine ...                     the factory engine: install, upgrade, status, run-now … (`factory engine --help`)
 
 Every command takes --repo PATH (default: the git root of the current directory).
 """
@@ -23,7 +24,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import config as config_mod
-from . import deprecations, runner, schedule, tasks, upgrade
+from . import deprecations, engine, runner, schedule, tasks, upgrade
 
 
 def _root(path: Path | None) -> Path:
@@ -65,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
     lead = 2 if argv[:1] == ["--repo"] else 0
     if argv[lead:lead + 1] == ["task"]:  # its own parser: options after `task` belong to it
         return task(argv[lead + 1:], Path(argv[1]) if lead else None)
+    if argv[:1] == ["engine"]:  # machine-wide, not per repo: it takes its own --repo options
+        return engine.main(argv[1:])
     ap = argparse.ArgumentParser(prog="factory", description=__doc__.split("\n\n")[0])
     ap.add_argument("--repo", type=Path)
     sub = ap.add_subparsers(dest="cmd", required=True)

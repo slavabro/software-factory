@@ -1,86 +1,36 @@
 """The agent session: a supervised process, not model calls inside workflow code (docs/designs/engine.md, section 3).
 
-- Its own process group, a pidfile and a lock in the worktree: a worker that died can't leave a second agent writing
-  to the same branch (a stale group found at start is killed first).
-- The machine stays awake while it runs (`caffeinate` on macOS, `systemd-inhibit` on Linux): Temporal's timeouts are
-  server wall-clock timers, and a laptop that slept mid-run would wake to timeouts that already fired.
-- A heartbeat every 30 s with progress; it is also how a cancel arrives. On cancel the group is killed and the
-  activity ends only once it is gone (the workflow waits: WAIT_CANCELLATION_COMPLETED).
+- One session per worktree: an exclusive lock, held for the whole session. A stale agent a dead worker left behind
+  (the pidfile names it, with its start time) is stopped before the new one starts.
+- Its own process group, killed as a group on cancel; the activity ends only once the group is gone (the workflow
+  waits: WAIT_CANCELLATION_COMPLETED).
+- The machine stays awake while it runs; Temporal's timeouts are server wall-clock timers.
+- A heartbeat every 30 s with progress, which is also how a cancel arrives. If the machine slept anyway (lid closed
+  on battery), a marker next to the run's log says so, and the run is recorded as interrupted, not failed.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
-import shutil
-import signal
 import subprocess
-import sys
 import time
 from pathlib import Path
 
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from engine import process
 from engine.activities.repo import _repo_config, run_env
 from engine.factory import config, runner
 from engine.models import StepInput, StepResult
 
 HEARTBEAT_EVERY = 30.0
-KILL_GRACE = 30.0
-PIDFILE = Path(".factory") / "agent.pid"
+LOCK_WAIT = 120.0  # a previous attempt still unwinding on this machine
+SLEPT_SUFFIX = ".slept"
 
 
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-
-
-def kill_group(pid: int, grace: float = KILL_GRACE) -> None:
-    """TERM the process group led by `pid`, then KILL what is left after `grace` seconds. A group that answers
-    EPERM has only exited-but-unreaped members left (macOS reports zombies that way): it is gone."""
-    for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 0.0)):
-        try:
-            os.killpg(pid, sig)
-        except (ProcessLookupError, PermissionError):
-            return
-        deadline = time.monotonic() + wait
-        while time.monotonic() < deadline:
-            try:
-                os.killpg(pid, 0)
-            except (ProcessLookupError, PermissionError):
-                return
-            time.sleep(0.2)
-
-
-def kill_stale(worktree: Path) -> int | None:
-    """Kill an agent group a previous attempt left running in `worktree`; returns its pid, if there was one."""
-    pidfile = worktree / PIDFILE
-    try:
-        pid = int(pidfile.read_text().strip())
-    except (OSError, ValueError):
-        return None
-    if _alive(pid):
-        kill_group(pid)
-    pidfile.unlink(missing_ok=True)
-    return pid
-
-
-def keep_awake(pid: int) -> subprocess.Popen[bytes] | None:
-    """Hold off idle sleep while `pid` lives; None where the platform has no way."""
-    if sys.platform == "darwin" and shutil.which("caffeinate"):
-        cmd = ["caffeinate", "-i", "-w", str(pid)]
-    elif shutil.which("systemd-inhibit"):
-        cmd = ["systemd-inhibit", "--what=idle:sleep", "--who=software-factory", "--why=agent session",
-               "tail", f"--pid={pid}", "-f", "/dev/null"]
-    else:
-        return None
-    return subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def slept_marker(log: str) -> Path:
+    return Path(log + SLEPT_SUFFIX)
 
 
 @activity.defn(name="run_agent_session")
@@ -88,45 +38,57 @@ async def run_agent_session(inp: StepInput) -> StepResult:
     worktree = Path(inp.paths.worktree)
     if not worktree.is_dir():
         raise ApplicationError(f"no worktree at {worktree}", type="WorktreeMissing")
-    cfg = _repo_config(inp.ref.repo)
-    wcfg = config.load(worktree)
-    invocation = runner.agent_invocation(wcfg, inp.prompt, worktree, run_env(cfg, inp.paths, worktree.name))
+
+    def resolve() -> tuple[list[str], dict[str, str]] | None:
+        cfg = _repo_config(inp.ref.repo)
+        wcfg = config.load(worktree)
+        result: tuple[list[str], dict[str, str]] | None = runner.agent_invocation(
+            wcfg, inp.prompt, worktree, run_env(cfg, inp.paths, worktree.name)
+        )
+        return result
+
+    invocation = await asyncio.to_thread(resolve)
     if invocation is None:
-        raise ApplicationError(
-            f"agent command {runner.agent_argv(wcfg, '')[0]!r} is not on PATH", type="AgentMissing", non_retryable=True
-        )
+        raise ApplicationError("the agent command is not on PATH", type="AgentMissing", non_retryable=True)
     argv, env = invocation
-    info = activity.info()
-    stale = kill_stale(worktree)
+
+    lock = process.WorktreeLock(worktree)
+    stale = await asyncio.to_thread(process.kill_stale, worktree)  # frees a lock a dead worker's agent held
+    if not await asyncio.to_thread(lock.acquire, LOCK_WAIT):
+        raise ApplicationError(f"another session holds {worktree}", type="WorktreeBusy")
     out_path = runner.agent_output_path(Path(inp.paths.log))
-    with open(inp.paths.log, "a") as log:
-        log.write(f"\nfactory engine: attempt {info.attempt}"
-                  + (f", stopped a stale agent (pid {stale})" if stale else "")
-                  + f"\n$ {' '.join(argv)}  (output → {out_path})\n")
-    with open(out_path, "a") as out:
-        proc = await asyncio.create_subprocess_exec(
-            *argv, cwd=worktree, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True
-        )
-    pidfile = worktree / PIDFILE
-    pidfile.parent.mkdir(parents=True, exist_ok=True)
-    pidfile.write_text(str(proc.pid))
-    awake = keep_awake(proc.pid)
-    started = time.time()
     try:
-        while True:
-            try:
-                code = await asyncio.wait_for(proc.wait(), timeout=HEARTBEAT_EVERY)
-                break
-            except asyncio.TimeoutError:
-                size = out_path.stat().st_size if out_path.exists() else 0
-                activity.heartbeat({"pid": proc.pid, "output_bytes": size, "seconds": int(time.time() - started)})
-    except asyncio.CancelledError:
-        await asyncio.to_thread(kill_group, proc.pid)
-        raise
+        with open(inp.paths.log, "a") as log:
+            log.write(f"\nfactory engine: attempt {activity.info().attempt}"
+                      + (f", stopped a stale agent (pid {stale})" if stale else "")
+                      + f"\n$ {' '.join(argv)}  (output → {out_path})\n")
+        with open(out_path, "a") as out:
+            proc = await asyncio.create_subprocess_exec(
+                *argv, cwd=worktree, env=env, stdout=out, stderr=subprocess.STDOUT, start_new_session=True
+            )
+        await asyncio.to_thread(process.write_pidfile, worktree, proc.pid)
+        awake = process.keep_awake(proc.pid)
+        watch = process.SleepWatch()
+        started = time.time()
+        try:
+            while True:
+                try:
+                    code = await asyncio.wait_for(proc.wait(), timeout=HEARTBEAT_EVERY)
+                    break
+                except asyncio.TimeoutError:
+                    slept = watch.tick()
+                    if slept:
+                        slept_marker(inp.paths.log).write_text(f"{int(slept)}\n")
+                    size = out_path.stat().st_size if out_path.exists() else 0
+                    activity.heartbeat({"pid": proc.pid, "output_bytes": size, "seconds": int(time.time() - started)})
+        except asyncio.CancelledError:
+            await asyncio.to_thread(process.kill_group, proc.pid)
+            raise
+        finally:
+            await asyncio.to_thread(process.clear_pidfile, worktree, proc.pid)
+            await asyncio.to_thread(process.stop, awake)
     finally:
-        pidfile.unlink(missing_ok=True)
-        if awake is not None:
-            awake.terminate()
+        lock.release()
     if code != 0:
         raise ApplicationError(f"the agent exited with {code}; output {out_path}", type="AgentFailed", non_retryable=True)
     return StepResult(ok=True, message=f"agent finished in {int(time.time() - started) // 60} min")

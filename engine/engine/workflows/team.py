@@ -37,15 +37,16 @@ FIRST_WAKE_TIMEOUT = timedelta(minutes=1)  # started without a wake (never by th
 MAX_BUDGET_WAITS = 3
 
 
-def classify(error: ActivityError) -> tuple[Outcome, str]:
-    """A step that timed out (heartbeat or start-to-close: a dead worker, or a sleep the machine took anyway) is
-    `interrupted` and doesn't count toward pausing the team; a cancelled step is `skipped`; anything else `failed`."""
+def classify(error: ActivityError) -> tuple[Outcome, str, bool]:
+    """(outcome, summary, timed out). A timeout is `failed` here; record_outcome turns it into `interrupted` when the
+    machine slept during the run (a hung or over-budget agent stays a failure and counts toward pausing the team).
+    A cancelled step is `skipped`."""
     cause = error.cause
     if isinstance(cause, TimeoutError):
-        return "interrupted", f"timed out ({cause.type.name.lower() if cause.type else 'unknown'})"
+        return "failed", f"timed out ({cause.type.name.lower() if cause.type else 'unknown'})", True
     if isinstance(cause, CancelledError):
-        return "skipped", "cancelled"
-    return "failed", (cause.message if isinstance(cause, ApplicationError) else str(cause or error))[:500]
+        return "skipped", "cancelled", False
+    return "failed", (cause.message if isinstance(cause, ApplicationError) else str(cause or error))[:500], False
 
 
 @workflow.defn(name="TeamWorkflow", versioning_behavior=VersioningBehavior.PINNED)
@@ -74,7 +75,17 @@ class TeamWorkflow:
         except asyncio.TimeoutError:
             return TeamResult(outcome="skipped", summary="started without a wake")
         wakes, self.pending = self.pending, []
-        result = await self._run_once(inp, wakes)
+        try:
+            result = await self._run_once(inp, wakes)
+        except ActivityError as e:
+            # A step outside the agent's (resolve, budget, clean, record) gave up. Record it if possible, and still
+            # carry pending wakes on below rather than failing the workflow and losing them.
+            outcome, summary, timed_out = classify(e)
+            try:
+                result = await self._record(inp, outcome, f"run stopped: {summary}", sorted({w.reason for w in wakes}),
+                                            timed_out=timed_out)
+            except ActivityError:
+                result = TeamResult(outcome=outcome, summary=f"run stopped (not recorded): {summary}")
         await workflow.wait_condition(workflow.all_handlers_finished)
         if self.pending:  # wakes that arrived during the run: one more run, on fresh history
             workflow.continue_as_new(
@@ -118,7 +129,8 @@ class TeamWorkflow:
         step = StepInput(ref=ref, paths=plan.paths, prompt=plan.prompt)
         outcome: Outcome = "failed"
         summary = ""
-        cancelled = False
+        cancelled = timed_out = False
+        log = plan.paths.log
         try:
             self.state = "preparing"
             prepared = await workflow.execute_activity(
@@ -128,11 +140,13 @@ class TeamWorkflow:
                 start_to_close_timeout=timedelta(minutes=35),  # the repo's own setup may take a while
                 heartbeat_timeout=HEARTBEAT_TIMEOUT,
                 retry_policy=SHORT,
+                cancellation_type=workflow.ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
                 summary="fresh worktree and the repo's setup",
             )
             if not prepared.ok:
-                outcome, summary = ("skipped" if prepared.message.startswith("not opted in") else "failed"), prepared.message
-                return await self._record(inp, outcome, summary, reasons)
+                outcome = "skipped" if prepared.message.startswith("not opted in") else "failed"
+                summary = prepared.message
+                return await self._record(inp, outcome, summary, reasons, log=log)
             self.state = "working"
             budget_time = timedelta(minutes=plan.budget_minutes)
             session = await workflow.execute_activity(
@@ -159,7 +173,7 @@ class TeamWorkflow:
             )
             outcome, summary = "done", delivered.message or session.message
         except ActivityError as e:
-            outcome, summary = classify(e)
+            outcome, summary, timed_out = classify(e)
             cancelled = isinstance(e.cause, CancelledError)
         finally:
             self.state = "cleaning"
@@ -173,20 +187,30 @@ class TeamWorkflow:
                 retry_policy=SHORT,
                 summary="remove the run's worktree (keeps unpushed work)",
             )
-        result = await self._record(inp, outcome, summary, reasons)
+        result = await self._record(inp, outcome, summary, reasons, timed_out=timed_out, log=log)
         if cancelled:  # cleaned up and recorded; now end as cancelled, as asked
             raise asyncio.CancelledError()
         return result
 
-    async def _record(self, inp: TeamInput, outcome: Outcome, summary: str, reasons: list[Reason]) -> TeamResult:
+    async def _record(
+        self,
+        inp: TeamInput,
+        outcome: Outcome,
+        summary: str,
+        reasons: list[Reason],
+        *,
+        timed_out: bool = False,
+        log: str | None = None,
+    ) -> TeamResult:
         self.state = "recording"
-        await workflow.execute_activity(
+        recorded: OutcomeResult = await workflow.execute_activity(
             "record_outcome",
-            OutcomeInput(ref=inp.ref, run_id=workflow.info().run_id, outcome=outcome, summary=summary, reasons=reasons),
+            OutcomeInput(ref=inp.ref, run_id=workflow.info().run_id, outcome=outcome, summary=summary, reasons=reasons,
+                         timed_out=timed_out, log=log),
             result_type=OutcomeResult,
             start_to_close_timeout=timedelta(minutes=1),
             retry_policy=PATIENT,
             summary=f"record {outcome}",
         )
-        self.state = outcome
-        return TeamResult(outcome=outcome, summary=summary)
+        self.state = recorded.outcome
+        return TeamResult(outcome=recorded.outcome, summary=summary)

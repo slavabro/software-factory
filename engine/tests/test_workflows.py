@@ -22,7 +22,7 @@ RUN = ["resolve_team", "check_budget", "prepare_worktree", "run_agent_session", 
        "record_outcome"]
 
 
-class WorkflowTest(unittest.IsolatedAsyncioTestCase):
+class Base(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.env = await time_skipping_env()
         self.addAsyncCleanup(self.env.shutdown)
@@ -45,6 +45,8 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
             signal_args=[Wake(reason=reason, event_id=event_id)], args=[TeamInput(ref=self.ref)],
         )
 
+
+class WorkflowTest(Base):
     async def test_one_wake_is_one_run_in_order(self):
         result = await self.result(await self.wake("tick-1"))
         self.assertEqual(result.outcome, "done")
@@ -112,6 +114,79 @@ class WorkflowTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((woken.wake.reason, woken.wake.event_id, woken.bypass_pause), ("schedule", tick_id, False))
 
 
+class MoreWorkflowTest(Base):
+    async def test_a_run_that_breaks_outside_the_agent_is_recorded_and_pending_wakes_still_run(self):
+        self.fakes.resolve_errors = 1
+        self.fakes.holding = True
+        handle = await self.wake("tick-1")
+        for _ in range(100):  # the first run is recording its failure; wake again meanwhile
+            if "resolve_team" in self.fakes.calls:
+                break
+            await asyncio.sleep(0.05)
+        await self.wake("ci-1", "ci_red")
+        self.fakes.hold.set()
+        await self.client.get_workflow_handle(self.ref.workflow_id).result()
+        outcomes = [(o.outcome, o.reasons) for o in self.fakes.outcomes]
+        self.assertEqual(outcomes[0][0], "failed")
+        self.assertIn("run stopped", self.fakes.outcomes[0].summary)
+        self.assertEqual(len(outcomes), 2, outcomes)
+
+    async def test_cancel_during_prepare_waits_for_it_then_cleans_up(self):
+        self.fakes.prepare_holding = True
+        handle = await self.wake("tick-1")
+        await self.fakes.prepare_started.wait()
+        await handle.cancel()
+        with self.assertRaises(WorkflowFailureError):
+            await handle.result()
+        self.assertTrue(self.fakes.prepare_cancelled)
+        self.assertNotIn("run_agent_session", self.fakes.calls)
+        self.assertEqual(self.fakes.calls[-2:], ["remove_worktree", "record_outcome"])
+
+    async def test_seen_event_ids_survive_continue_as_new(self):
+        self.fakes.holding = True
+        await self.wake("tick-1")
+        await self.fakes.agent_started.wait()
+        await self.wake("ci-1", "ci_red")  # → a second run, after continue-as-new
+        self.fakes.hold.set()
+        await self.client.get_workflow_handle(self.ref.workflow_id).result()
+        self.assertEqual(self.fakes.calls.count("record_outcome"), 2)
+
+
+class ReplayTest(Base):
+    async def test_histories_replay_against_the_current_code(self):
+        """Each workflow's history replays on the code that produced it: workflow code that isn't deterministic
+        (clock, randomness, I/O) fails here. Across builds Pinned versioning means an old history never meets new
+        code (docs/designs/engine.md, sections 6 and 9)."""
+        from temporalio.worker import Replayer
+
+        from factory_runtime.temporal import build_workflow_runner, data_converter
+
+        self.fakes.holding = True
+        first = await self.wake("tick-1")
+        await self.fakes.agent_started.wait()
+        await self.wake("ci-1", "ci_red")
+        self.fakes.hold.set()
+        await self.client.get_workflow_handle(self.ref.workflow_id).result()
+        tick_id = f"tick/{self.ref.repo_name}/qa-x"
+        await self.client.execute_workflow(ScheduleTick.run, TickInput(ref=self.ref), id=tick_id, task_queue=TASK_QUEUE)
+        replayer = Replayer(workflows=WORKFLOWS, data_converter=data_converter(),
+                            workflow_runner=build_workflow_runner(["engine.models"]))
+        histories = [
+            await self.client.get_workflow_handle(self.ref.workflow_id, run_id=first.result_run_id).fetch_history(),
+            await self.client.get_workflow_handle(self.ref.workflow_id).fetch_history(),  # after continue-as-new
+            await self.client.get_workflow_handle(tick_id).fetch_history(),
+        ]
+        self.assertGreaterEqual(len(histories), 3)
+        async with replayer.workflow_replay_iterator(_aiter(histories)) as results:
+            async for result in results:
+                self.assertIsNone(result.replay_failure)
+
+
+async def _aiter(items):
+    for item in items:
+        yield item
+
+
 class ClassifyTest(unittest.TestCase):
     def error(self, cause: BaseException) -> ActivityError:
         err = ActivityError("activity failed", scheduled_event_id=1, started_event_id=2, identity="w",
@@ -119,12 +194,14 @@ class ClassifyTest(unittest.TestCase):
         err.__cause__ = cause
         return err
 
-    def test_a_timeout_is_interrupted_not_failed(self):
+    def test_a_timeout_is_a_failure_flagged_as_timed_out(self):
+        """record_outcome decides: interrupted only if the machine slept (tests/test_activities.py)."""
         timeout = TimeoutError("heartbeat", type=TimeoutType.HEARTBEAT, last_heartbeat_details=[])
-        self.assertEqual(classify(self.error(timeout))[0], "interrupted")
+        self.assertEqual(classify(self.error(timeout)), ("failed", "timed out (heartbeat)", True))
 
     def test_anything_else_is_failed_with_its_message(self):
-        self.assertEqual(classify(self.error(ApplicationError("the agent exited with 2"))), ("failed", "the agent exited with 2"))
+        self.assertEqual(classify(self.error(ApplicationError("the agent exited with 2"))),
+                         ("failed", "the agent exited with 2", False))
 
 
 if __name__ == "__main__":

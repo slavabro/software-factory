@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AwareDatetime, BaseModel, Field
 
 Reason = Literal["schedule", "ci_red", "deploy_failed", "incident", "merged", "decision", "manual"]
 Outcome = Literal["done", "failed", "interrupted", "skipped"]
@@ -63,7 +63,7 @@ class TeamPlan(BaseModel):
 
 class BudgetAnswer(BaseModel):
     verdict: Literal["go", "wait", "stop"]
-    until: datetime | None = None  # with "wait"
+    until: AwareDatetime | None = None  # with "wait"; timezone-aware, so workflow time arithmetic is safe
     reason: str = ""
 
 
@@ -84,9 +84,12 @@ class OutcomeInput(BaseModel):
     outcome: Outcome
     summary: str
     reasons: list[Reason]
+    timed_out: bool = False  # a step timed out: interrupted if the machine slept during the run, else failed
+    log: str | None = None  # the run's log; a sleep leaves a marker next to it
 
 
 class OutcomeResult(BaseModel):
+    outcome: Outcome  # as recorded (a timeout across a sleep becomes interrupted)
     consecutive_failures: int
     paused: bool
 

@@ -14,6 +14,7 @@ from temporalio.common import SearchAttributeKey, SearchAttributePair, TypedSear
 from temporalio.service import RPCError, RPCStatusCode
 
 from factory_runtime.temporal import activity_idempotency_key, signal_with_start
+from engine.activities.agent import slept_marker
 from engine.models import (
     BudgetAnswer,
     OutcomeInput,
@@ -23,6 +24,7 @@ from engine.models import (
     WakeTeamInput,
     WakeTeamResult,
 )
+from engine import settings as settings_mod
 from engine.settings import TASK_QUEUE, EngineSettings
 
 PAUSE_AFTER_FAILURES = 3
@@ -77,17 +79,23 @@ class TeamActivities:
 
     @activity.defn(name="check_budget")
     async def check_budget(self, ref: TeamRef) -> BudgetAnswer:
-        """The spend switch today; plan usage windows (wait until the window reopens) join with F-41."""
-        if not self.settings.unattended:
+        """The spend switch, read fresh on every run so turning it off takes effect at once; plan usage windows
+        (wait until the window reopens) join with F-41."""
+        if not settings_mod.load().unattended:
             return BudgetAnswer(verdict="stop", reason="unattended runs are off (engine.toml: unattended = false)")
         return BudgetAnswer(verdict="go")
 
     @activity.defn(name="record_outcome")
     async def record_outcome(self, inp: OutcomeInput) -> OutcomeResult:
-        """Append the run to the team's notebook (once, however often retried), count failures in a row, and pause
-        the team's schedule after PAUSE_AFTER_FAILURES. Interrupted and skipped runs don't count."""
+        """Record the run once however often retried: the team's state (failures in a row) first, written atomically,
+        then a notebook entry. A timeout during which the machine slept is `interrupted`; interrupted and skipped
+        runs don't count. At PAUSE_AFTER_FAILURES the team's schedule is paused, on every attempt (pausing twice is
+        harmless), so a pause that failed once is not lost."""
         key = activity_idempotency_key()
         team_dir = self._team_dir(inp.ref)
+        outcome = inp.outcome
+        if inp.timed_out and inp.log and slept_marker(inp.log).is_file():
+            outcome = "interrupted"
 
         def write() -> tuple[int, bool]:
             team_dir.mkdir(parents=True, exist_ok=True)
@@ -97,22 +105,24 @@ class TeamActivities:
             recorded: list[str] = list(raw.get("recorded", []))
             if key in recorded:
                 return failures, False
-            if inp.outcome == "failed":
+            if outcome == "failed":
                 failures += 1
-            elif inp.outcome == "done":
+            elif outcome == "done":
                 failures = 0
             recorded = [*recorded, key][-50:]
+            tmp = state_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({"failures": failures, "recorded": recorded}))
+            tmp.replace(state_path)
             with open(team_dir / "notebook.md", "a") as notebook:
                 notebook.write(
-                    f"\n## {inp.run_id[:8]} · {inp.outcome} · woken by {', '.join(inp.reasons) or 'nothing'}\n\n"
+                    f"\n## {inp.run_id[:8]} · {outcome} · woken by {', '.join(inp.reasons) or 'nothing'}\n\n"
                     f"{inp.summary or '(no summary)'}\n"
                 )
-            state_path.write_text(json.dumps({"failures": failures, "recorded": recorded}))
             return failures, True
 
-        failures, fresh = await asyncio.to_thread(write)
+        failures, _ = await asyncio.to_thread(write)
         paused = False
-        if fresh and failures >= PAUSE_AFTER_FAILURES:
+        if failures >= PAUSE_AFTER_FAILURES:
             try:
                 await self.client.get_schedule_handle(inp.ref.schedule_id).pause(
                     note=f"paused after {failures} failed runs in a row; last: {inp.summary[:200]}"
@@ -121,7 +131,7 @@ class TeamActivities:
             except RPCError as e:
                 if e.status != RPCStatusCode.NOT_FOUND:
                     raise
-        return OutcomeResult(consecutive_failures=failures, paused=paused)
+        return OutcomeResult(outcome=outcome, consecutive_failures=failures, paused=paused)
 
     @activity.defn(name="wake_team")
     async def wake_team(self, inp: WakeTeamInput) -> WakeTeamResult:
