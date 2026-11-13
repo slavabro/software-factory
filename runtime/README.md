@@ -50,6 +50,11 @@ id), `unique_id` (`{base_id}_{uuid4}`, `[i]` appended inside `for_each`), `resul
 `metadata` and `ctx.resolve(value)`. Keep per-run state in `wf.step_state`, never on a module, class or function: the
 sandbox re-imports modules per run.
 
+A step type moved from a product's own engine must keep its command sequence, so read anything derived from
+`ctx.process_def` exactly the way the source did: the definition is whatever the file held, so `metadata` may be
+absent, None or not a dict, and `(process_def.get("metadata") or {}).get(...)` and `process_def.get("metadata",
+{}).get(...)` fail on different inputs. A "tidier" read changes which runs fail and what they send.
+
 The package `factory_runtime.process` imports only workflow-side code; `files`, `schedules`, `runs` and `settings`
 are imported by their own module name. A product passes in its own: `ProcessSettings`, `TemporalSettings` (the task
 queue), the process loader, the memo its pages read (`schedule_memo`, the memo of an on-demand run), which new
@@ -57,7 +62,8 @@ schedules start paused (`initially_paused`), its `ScheduleDefinition` subclass, 
 on-demand run.
 
 **Known quirks**, kept because running workflows replay against this code; change one only under Worker Versioning
-(`tests/test_process_quirks.py` pins each):
+(`tests/test_process_quirks.py` pins most by name; the golden runs in `tests/test_process_golden.py` pin every
+step-level one command by command):
 
 - Templates resolve only whole strings (`"x {{input.a}}"` stays as written); conditions substitute each placeholder
   in place, a string as its repr; a missing path gives None.
@@ -67,9 +73,13 @@ on-demand run.
   `workflow_id` is `{workflow_name}_{uuid4}`.
 - `signal_name:` on a pause step is ignored; `current_step` in `get_step_results` is always None; a skipped step is
   absent from the results; schedules start a process with two arguments, on-demand runs with three.
-- An unknown step type logs a warning and stores None.
+- An unknown step type logs a warning and stores None; a None process definition fails the workflow task (retried
+  until terminated), not the run.
 - An activity step's `kwargs:` are `execute_activity` options, not activity arguments; more than one `args:` element
-  fails the workflow task (the SDK takes one argument).
+  fails the workflow task (the SDK takes one argument); a dict `args:` passes its keys.
+- An unknown `parent_close_policy:` on a workflow step logs a warning and keeps the server default.
+- `for_each`: an inner step's own `on_error:` is ignored (only the `for_each` step's counts); a scalar `items:` is one
+  item, None gives `[]`; an inner type not flagged `for_each` gives None per item.
 
 **Version:** `factory_runtime.__version__`; a release is the factory tag `v<version>`.
 

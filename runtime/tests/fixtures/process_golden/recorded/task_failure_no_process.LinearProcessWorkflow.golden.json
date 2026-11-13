@@ -1,0 +1,18 @@
+{
+  "case": "task_failure_no_process.LinearProcessWorkflow",
+  "workflow_id": "golden-task_failure_no_process-linear",
+  "uuid4_draws": 0,
+  "commands": [
+    {
+      "command": "workflow_task_failed",
+      "failure": {
+        "message": "Process definition is None",
+        "info": "application_failure_info"
+      }
+    },
+    {
+      "command": "terminated_by_harness"
+    }
+  ],
+  "answers": []
+}

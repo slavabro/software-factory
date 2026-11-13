@@ -1,0 +1,18 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  A failing activity step without on_error fails the run (failure chain pinned); later steps never run; the query
+  after the failure shows only the steps before it.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+input: {}
+metadata: {}
+outcome: failed
+process:
+  steps:
+    - id: first
+      type: activity
+      activity: golden_value_activity
+      args: [first]
+    - id: boom
+      type: activity
+      activity: golden_fail_activity
+      retry: {max_attempts: 1}

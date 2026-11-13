@@ -1,0 +1,89 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  Conditions: literals, templates from results and input (string values as repr), a missing path and a skipped
+  step resolving to None, booleans, not, arithmetic, a syntax error and an unsafe call (both False). Conditional and
+  Hybrid skip the false ones (absent from results); Linear ignores `condition` and runs every step. Started with two
+  arguments, as a schedule starts a process.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+input: {threshold: 5, name: "it's"}
+process:
+  steps:
+    - id: seed
+      type: activity
+      activity: golden_value_activity
+      args: [{count: 3, label: alpha, flag: true, nothing: null}]
+    - id: literal_true
+      type: activity
+      activity: golden_value_activity
+      args: [literal_true]
+      condition: "1 < 2"
+    - id: literal_false
+      type: activity
+      activity: golden_value_activity
+      args: [literal_false]
+      condition: "1 > 2"
+    - id: template_numbers
+      type: activity
+      activity: golden_value_activity
+      args: [template_numbers]
+      condition: "{{results.seed.count}} >= 3 and {{input.threshold}} < 10"
+    - id: template_string
+      type: activity
+      activity: golden_value_activity
+      args: [template_string]
+      condition: "{{results.seed.label}} == 'alpha'"
+    - id: template_string_quote
+      type: activity
+      activity: golden_value_activity
+      args: [template_string_quote]
+      condition: "{{input.name}} == \"it's\""
+    - id: missing_is_none
+      type: activity
+      activity: golden_value_activity
+      args: [missing_is_none]
+      condition: "{{results.seed.absent}} == None"
+    - id: skipped_step_is_none
+      type: activity
+      activity: golden_value_activity
+      args: [skipped_step_is_none]
+      condition: "{{results.literal_false}} == None"
+    - id: null_value
+      type: activity
+      activity: golden_value_activity
+      args: [null_value]
+      condition: "{{results.seed.nothing}} != None"
+    - id: boolean
+      type: activity
+      activity: golden_value_activity
+      args: [boolean]
+      condition: "{{results.seed.flag}} == True"
+    - id: negation
+      type: activity
+      activity: golden_value_activity
+      args: [negation]
+      condition: "not {{results.seed.flag}}"
+    - id: arithmetic
+      type: activity
+      activity: golden_value_activity
+      args: [arithmetic]
+      condition: "({{results.seed.count}} * 2) % 4 == 2 and -{{results.seed.count}} < 0"
+    - id: whole_dict
+      type: activity
+      activity: golden_value_activity
+      args: [whole_dict]
+      condition: "{{results.seed}} == None"
+    - id: syntax_error
+      type: activity
+      activity: golden_value_activity
+      args: [syntax_error]
+      condition: "{{results.seed.label}} ~~ 1"
+    - id: unsafe_call
+      type: activity
+      activity: golden_value_activity
+      args: [unsafe_call]
+      condition: "__import__('os') == None"
+    - id: empty_condition
+      type: activity
+      activity: golden_value_activity
+      args: [empty_condition]
+      condition: ""

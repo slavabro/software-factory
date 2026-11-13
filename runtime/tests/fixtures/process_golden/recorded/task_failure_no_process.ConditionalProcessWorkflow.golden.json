@@ -1,0 +1,18 @@
+{
+  "case": "task_failure_no_process.ConditionalProcessWorkflow",
+  "workflow_id": "golden-task_failure_no_process-conditional",
+  "uuid4_draws": 0,
+  "commands": [
+    {
+      "command": "workflow_task_failed",
+      "failure": {
+        "message": "'NoneType' object has no attribute 'get'",
+        "info": "application_failure_info"
+      }
+    },
+    {
+      "command": "terminated_by_harness"
+    }
+  ],
+  "answers": []
+}

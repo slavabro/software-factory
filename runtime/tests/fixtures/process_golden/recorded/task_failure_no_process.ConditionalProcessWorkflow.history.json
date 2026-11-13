@@ -1,0 +1,119 @@
+{
+ "events": [
+  {
+   "eventId": "1",
+   "eventTime": "2026-11-13T14:26:19.385Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+   "workflowExecutionStartedEventAttributes": {
+    "workflowType": {
+     "name": "ConditionalProcessWorkflow"
+    },
+    "taskQueue": {
+     "name": "process-engine-golden"
+    },
+    "input": {
+     "payloads": [
+      {
+       "metadata": {
+        "encoding": "YmluYXJ5L251bGw="
+       }
+      },
+      {
+       "metadata": {
+        "encoding": "anNvbi9wbGFpbg=="
+       },
+       "data": "e30="
+      },
+      {
+       "metadata": {
+        "encoding": "anNvbi9wbGFpbg=="
+       },
+       "data": "e30="
+      }
+     ]
+    },
+    "workflowExecutionTimeout": "315360000s",
+    "workflowRunTimeout": "315360000s",
+    "workflowTaskTimeout": "10s",
+    "originalExecutionRunId": "a57598eb-9a28-4a4c-b4e9-ff467cef7e94",
+    "identity": "golden-worker",
+    "firstExecutionRunId": "a57598eb-9a28-4a4c-b4e9-ff467cef7e94",
+    "attempt": 1,
+    "firstWorkflowTaskBackoff": "0s",
+    "priority": {}
+   }
+  },
+  {
+   "eventId": "2",
+   "eventTime": "2026-11-13T14:26:19.385Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+   "workflowTaskScheduledEventAttributes": {
+    "taskQueue": {
+     "name": "process-engine-golden"
+    },
+    "startToCloseTimeout": "10s",
+    "attempt": 1
+   }
+  },
+  {
+   "eventId": "3",
+   "eventTime": "2026-11-13T14:26:19.385Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+   "workflowTaskStartedEventAttributes": {
+    "scheduledEventId": "2",
+    "identity": "golden-worker",
+    "historySizeBytes": "369"
+   }
+  },
+  {
+   "eventId": "4",
+   "eventTime": "2026-11-13T14:26:19.395Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_FAILED",
+   "workflowTaskFailedEventAttributes": {
+    "scheduledEventId": "2",
+    "startedEventId": "3",
+    "cause": "WORKFLOW_TASK_FAILED_CAUSE_WORKFLOW_WORKER_UNHANDLED_FAILURE",
+    "failure": {
+     "message": "'NoneType' object has no attribute 'get'",
+     "stackTrace": "",
+     "applicationFailureInfo": {
+      "type": "AttributeError"
+     }
+    },
+    "identity": "golden-worker"
+   }
+  },
+  {
+   "eventId": "5",
+   "eventTime": "2026-11-13T14:26:19.395Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+   "workflowTaskScheduledEventAttributes": {
+    "taskQueue": {
+     "name": "process-engine-golden"
+    },
+    "startToCloseTimeout": "10s",
+    "attempt": 2
+   }
+  },
+  {
+   "eventId": "6",
+   "eventTime": "2026-11-13T14:26:19.395Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+   "workflowTaskStartedEventAttributes": {
+    "scheduledEventId": "5",
+    "identity": "golden-worker",
+    "historySizeBytes": "3725"
+   }
+  },
+  {
+   "eventId": "7",
+   "eventTime": "2026-11-13T14:26:19.439Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED",
+   "workflowExecutionTerminatedEventAttributes": {
+    "reason": "golden run: workflow task failure recorded",
+    "details": {},
+    "identity": "golden-worker"
+   }
+  }
+ ]
+}

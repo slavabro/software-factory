@@ -154,7 +154,8 @@ def build_schedule(
     else:
         workflow_ref = config.workflow_class
         workflow_args = schedule_def.workflow_args or []
-    memo = (schedule_memo or default_schedule_memo)(config, process_def)
+    # A copy: the hook may hand back a dict it keeps (a module constant, a cache); the keys below must not leak into it.
+    memo = dict((schedule_memo or default_schedule_memo)(config, process_def))
 
     if schedule_def.cron:
         memo["cron_expression"] = schedule_def.cron

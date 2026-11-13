@@ -1,0 +1,20 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  A resume_step signal delivered with the start (signal-with-start) is kept until its pause step is reached and
+  consumed there, with and without a timeout on the step; empty and missing input.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+input: null
+start_signal: {step_id: gate, data: {note: delivered with the start}}
+process:
+  steps:
+    - id: first
+      type: activity
+      activity: golden_value_activity
+      args: ["{{input.anything}}"]
+    - id: gate
+      type: pause
+      timeout: 300
+    - id: last
+      type: activity
+      activity: golden_value_activity
+      args: ["{{results.gate.note}}"]

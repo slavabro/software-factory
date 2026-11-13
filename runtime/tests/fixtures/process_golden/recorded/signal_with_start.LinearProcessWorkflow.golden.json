@@ -1,0 +1,81 @@
+{
+  "case": "signal_with_start.LinearProcessWorkflow",
+  "workflow_id": "golden-signal_with_start-linear",
+  "uuid4_draws": 3,
+  "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        null
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "2",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "delivered with the start"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "complete_workflow",
+      "result": [
+        {
+          "first": null,
+          "gate": {
+            "note": "delivered with the start"
+          },
+          "last": "delivered with the start"
+        }
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "first",
+          "gate",
+          "last"
+        ],
+        "results": {
+          "first": null,
+          "gate": {
+            "note": "delivered with the start"
+          },
+          "last": "delivered with the start"
+        }
+      }
+    }
+  ]
+}

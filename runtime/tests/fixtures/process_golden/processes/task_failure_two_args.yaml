@@ -1,0 +1,18 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  An activity step with two `args:` elements and no on_error fails the workflow task (the SDK takes one `arg`):
+  the run does not fail, it retries the task until terminated.
+interpreters: [LinearProcessWorkflow]
+input: {}
+metadata: {}
+outcome: task_failed
+process:
+  steps:
+    - id: first
+      type: activity
+      activity: golden_value_activity
+      args: [first]
+    - id: two_args
+      type: activity
+      activity: golden_echo_activity
+      args: [one, two]

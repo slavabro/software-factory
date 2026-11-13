@@ -1,0 +1,281 @@
+{
+  "case": "conditions.ConditionalProcessWorkflow",
+  "workflow_id": "golden-conditions-conditional",
+  "uuid4_draws": 10,
+  "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "count": 3,
+          "label": "alpha",
+          "flag": true,
+          "nothing": null
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "2",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "literal_true"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "3",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "template_numbers"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "4",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "template_string"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "5",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "template_string_quote"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "6",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "missing_is_none"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "7",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "skipped_step_is_none"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "8",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "boolean"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "9",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "arithmetic"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "10",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "empty_condition"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "complete_workflow",
+      "result": [
+        {
+          "seed": {
+            "count": 3,
+            "label": "alpha",
+            "flag": true,
+            "nothing": null
+          },
+          "literal_true": "literal_true",
+          "template_numbers": "template_numbers",
+          "template_string": "template_string",
+          "template_string_quote": "template_string_quote",
+          "missing_is_none": "missing_is_none",
+          "skipped_step_is_none": "skipped_step_is_none",
+          "boolean": "boolean",
+          "arithmetic": "arithmetic",
+          "empty_condition": "empty_condition"
+        }
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "seed",
+          "literal_true",
+          "template_numbers",
+          "template_string",
+          "template_string_quote",
+          "missing_is_none",
+          "skipped_step_is_none",
+          "boolean",
+          "arithmetic",
+          "empty_condition"
+        ],
+        "results": {
+          "seed": {
+            "count": 3,
+            "label": "alpha",
+            "flag": true,
+            "nothing": null
+          },
+          "literal_true": "literal_true",
+          "template_numbers": "template_numbers",
+          "template_string": "template_string",
+          "template_string_quote": "template_string_quote",
+          "missing_is_none": "missing_is_none",
+          "skipped_step_is_none": "skipped_step_is_none",
+          "boolean": "boolean",
+          "arithmetic": "arithmetic",
+          "empty_condition": "empty_condition"
+        }
+      }
+    }
+  ]
+}

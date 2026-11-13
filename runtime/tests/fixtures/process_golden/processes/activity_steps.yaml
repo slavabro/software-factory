@@ -1,0 +1,87 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  Activity steps and their options: defaults (60 s, 3 attempts), timeout, heartbeat, every retry key, args resolved
+  from input and results (missing paths -> None, partial strings left as written, {{item}} outside for_each -> None),
+  kwargs passed as execute_activity options (summary, activity_id), a dict `args` iterated as its keys, a bad kwarg
+  and two args failing their step under on_error continue, retries exhausted and a non-retryable error under
+  on_error continue, and an unknown step type stored as None.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+input:
+  label: alpha
+  nested: {deep: {value: 42}}
+  list: [1, 2, 3]
+metadata: {source: golden}
+process:
+  metadata: {name: golden_activity_steps}
+  steps:
+    - id: plain
+      type: activity
+      activity: golden_echo_activity
+    - id: with_options
+      type: activity
+      activity: golden_echo_activity
+      args: ["{{input.label}}"]
+      timeout: 15
+      heartbeat_timeout_seconds: 5
+      retry:
+        max_attempts: 5
+        initial_interval_seconds: 2
+        non_retryable_error_types: [GoldenFatalError, GoldenOtherError]
+    - id: templates
+      type: activity
+      activity: golden_echo_activity
+      args:
+        - from_results: "{{results.with_options.args}}"
+          whole_result: "{{results.plain}}"
+          from_input: "{{input.nested.deep.value}}"
+          input_list: ["{{input.list}}", literal]
+          missing_field: "{{results.with_options.no_such_field}}"
+          missing_step: "{{results.never_ran.x}}"
+          missing_input: "{{input.absent.path}}"
+          partial_string: "prefix {{input.label}} suffix"
+          item_outside_loop: "{{item}}"
+          item_field_outside_loop: "{{item.name}}"
+          number: 7
+          flag: true
+          nothing: null
+    - id: kwargs_as_options
+      type: activity
+      activity: golden_echo_activity
+      args: ["{{input.label}}"]
+      kwargs:
+        summary: "{{input.label}}"
+        activity_id: golden-fixed-activity-id
+    - id: args_dict_quirk
+      type: activity
+      activity: golden_echo_activity
+      args: {only_key: ignored_value}
+    - id: bad_kwarg
+      type: activity
+      activity: golden_echo_activity
+      kwargs: {not_an_option: 1}
+      on_error: continue
+    - id: two_args
+      type: activity
+      activity: golden_echo_activity
+      args: [first, second]
+      on_error: continue
+    - id: retries_exhausted
+      type: activity
+      activity: golden_fail_activity
+      retry: {max_attempts: 2, initial_interval_seconds: 1}
+      on_error: continue
+    - id: non_retryable
+      type: activity
+      activity: golden_fail_activity
+      retry: {max_attempts: 4, non_retryable_error_types: [GoldenFatalError]}
+      on_error: continue
+    - id: missing_activity_key
+      type: activity
+      on_error: continue
+    - id: mystery
+      type: mystery_step_type
+      activity: golden_echo_activity
+    - id: after_all
+      type: activity
+      activity: golden_value_activity
+      args: ["{{results.retries_exhausted}}"]

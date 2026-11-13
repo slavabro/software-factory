@@ -1,0 +1,379 @@
+{
+  "case": "child_workflows.LinearProcessWorkflow",
+  "workflow_id": "golden-child_workflows-linear",
+  "uuid4_draws": 22,
+  "commands": [
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#2>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "label": "alpha",
+          "missing": null
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "golden-child-explicit",
+      "task_queue": "process-engine-golden-alt",
+      "input": [
+        {
+          "from_previous": {
+            "label": "alpha",
+            "missing": null
+          }
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#5>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        [
+          "one",
+          "alpha"
+        ]
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#7>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {}
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#9>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "mode": "fire_and_forget"
+        }
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_ABANDON",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#11>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {}
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#13>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {}
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_REQUEST_CANCEL",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#15>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {}
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenChildWorkflow",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#17>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {}
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 120.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenFailingChildWorkflow",
+      "workflow_id": "GoldenFailingChildWorkflow_<uuid4#19>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {}
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 0.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "start_child_workflow",
+      "workflow_type": "GoldenSlowChildWorkflow",
+      "workflow_id": "GoldenSlowChildWorkflow_<uuid4#21>",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {}
+      ],
+      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+      "workflow_execution_timeout": 60.0,
+      "workflow_run_timeout": 0.0,
+      "workflow_task_timeout": 10.0,
+      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+      "retry_policy": null,
+      "cron_schedule": "",
+      "memo": [],
+      "search_attributes": [],
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "GoldenChildWorkflow_<uuid4#9>"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "complete_workflow",
+      "result": [
+        {
+          "child_default": {
+            "child": "GoldenChildWorkflow",
+            "received": {
+              "label": "alpha",
+              "missing": null
+            }
+          },
+          "child_explicit": {
+            "child": "GoldenChildWorkflow",
+            "received": {
+              "from_previous": {
+                "label": "alpha",
+                "missing": null
+              }
+            }
+          },
+          "child_list_args": {
+            "child": "GoldenChildWorkflow",
+            "received": [
+              "one",
+              "alpha"
+            ]
+          },
+          "child_no_args": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "fire_and_forget": {
+            "child_workflow_id": "GoldenChildWorkflow_<uuid4#9>"
+          },
+          "policy_terminate": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "policy_request_cancel": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "policy_invalid": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "with_execution_timeout": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "child_failure": null,
+          "child_times_out": null,
+          "last": "GoldenChildWorkflow_<uuid4#9>"
+        }
+      ]
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "child_default",
+          "child_explicit",
+          "child_list_args",
+          "child_no_args",
+          "fire_and_forget",
+          "policy_terminate",
+          "policy_request_cancel",
+          "policy_invalid",
+          "with_execution_timeout",
+          "child_failure",
+          "child_times_out",
+          "last"
+        ],
+        "results": {
+          "child_default": {
+            "child": "GoldenChildWorkflow",
+            "received": {
+              "label": "alpha",
+              "missing": null
+            }
+          },
+          "child_explicit": {
+            "child": "GoldenChildWorkflow",
+            "received": {
+              "from_previous": {
+                "label": "alpha",
+                "missing": null
+              }
+            }
+          },
+          "child_list_args": {
+            "child": "GoldenChildWorkflow",
+            "received": [
+              "one",
+              "alpha"
+            ]
+          },
+          "child_no_args": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "fire_and_forget": {
+            "child_workflow_id": "GoldenChildWorkflow_<uuid4#9>"
+          },
+          "policy_terminate": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "policy_request_cancel": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "policy_invalid": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "with_execution_timeout": {
+            "child": "GoldenChildWorkflow",
+            "received": {}
+          },
+          "child_failure": null,
+          "child_times_out": null,
+          "last": "GoldenChildWorkflow_<uuid4#9>"
+        }
+      }
+    }
+  ]
+}

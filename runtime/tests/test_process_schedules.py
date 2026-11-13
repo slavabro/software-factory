@@ -314,6 +314,16 @@ class BuildScheduleTest(FakeProcess):
         self.assertEqual(memo, {"k": "v", "cron_expression": "0 * * * *"})
         self.assertEqual(schedule.action.memo, memo)
 
+    def test_memo_hook_dict_is_copied_not_mutated(self):
+        shared = {"mode": "yaml_process"}  # a hook may hand back a dict it keeps (a constant, a cache)
+        cron_def = sd(id="cron", cron="0 * * * *")
+        interval_def = sd(id="every", interval_seconds=300)
+        _, cron_memo = self.build(_process_config(cron_def), cron_def, schedule_memo=lambda c, p: shared)
+        _, interval_memo = self.build(_process_config(interval_def), interval_def, schedule_memo=lambda c, p: shared)
+        self.assertEqual(shared, {"mode": "yaml_process"})
+        self.assertEqual(cron_memo, {"mode": "yaml_process", "cron_expression": "0 * * * *"})
+        self.assertEqual(interval_memo, {"mode": "yaml_process", "interval_seconds": 300})
+
 
 # -----------------------------------------------------------------------------
 # initially_paused: the product decides which new schedules start paused
@@ -795,6 +805,69 @@ class SyncOnServerTest(unittest.IsolatedAsyncioTestCase):
             # Converged.
             again = await manager.sync_all_from_files()
             self.assertIn(schedule_id, again.skipped)
+        finally:
+            await handle.delete()
+
+    async def test_process_schedule_with_nested_definition_and_memo_hook_round_trips(self):
+        """A process schedule's args carry the whole (nested) process definition and its memo comes from the
+        product's hook: both must read back equal from describe, or every sync would rewrite the schedule."""
+        client = self.env.client
+        schedule_id = f"test-sync-process-{uuid.uuid4()}"
+        process_def = {
+            "name": "Nested Process",
+            "interpreter": "ConditionalProcessWorkflow",
+            "metadata": {"department": "ops", "tags": ["a", "b"], "owner": None},
+            "steps": [
+                {
+                    "id": "fetch",
+                    "type": "activity",
+                    "activity": "fetch_activity",
+                    "args": [{"since": "{{input.since}}", "limit": 50, "flags": {"dry_run": False}}],
+                    "retry": {"max_attempts": 5, "initial_interval_seconds": 2.5},
+                },
+                {
+                    "id": "each",
+                    "type": "for_each",
+                    "items": "{{results.fetch.items}}",
+                    "step": {"type": "workflow", "workflow_name": "Child", "args": {"item": "{{item}}"}},
+                    "condition": "{{results.fetch.count}} > 0",
+                },
+            ],
+        }
+        config = ProcessScheduleConfig(
+            process_path=PROCESS_PATH,
+            interpreter="ConditionalProcessWorkflow",
+            schedules=[
+                ScheduleDefinition(
+                    id=schedule_id,
+                    cron="30 6 * * *",
+                    timezone="Europe/London",
+                    input_data={"since": "yesterday", "window": [1, 2]},
+                )
+            ],
+        )
+        manager = ScheduleManager(
+            client,
+            SETTINGS,
+            TEMPORAL,
+            discover=lambda: [config],
+            load_process=lambda path: process_def,
+            schedule_memo=fo_style_memo,
+        )
+        handle = client.get_schedule_handle(schedule_id)
+        try:
+            created = await manager.sync_all_from_files()
+            self.assertEqual(created.created, [schedule_id], created)
+
+            again = await manager.sync_all_from_files()
+            self.assertEqual(again.skipped, [schedule_id], again)
+            self.assertEqual(again.updated, [])
+            self.assertEqual(again.errors, [])
+
+            view = await manager.get_schedule(schedule_id)
+            self.assertEqual(view.memo["department"], "ops")
+            self.assertEqual(view.memo["process_name"], "Nested Process")
+            self.assertEqual(view.cron_expression, "30 6 * * *")
         finally:
             await handle.delete()
 

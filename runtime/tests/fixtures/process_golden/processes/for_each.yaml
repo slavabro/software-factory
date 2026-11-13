@@ -1,0 +1,89 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  for_each over activity (with retry options and {{item}} / {{item.field}} / a missing item field), over a workflow
+  child (fire and forget, abandon; waiting, with execution_timeout), items as a
+  scalar (wrapped), None (skipped, []), an empty list; unsupported inner types (pause, nested for_each -> None per
+  item), no inner step ([]), and an inner on_error (ignored) with the outer on_error continue (failed item -> None).
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+input:
+  things: [{name: one, size: 1}, {name: two, size: 2}]
+  single: lonely
+  empty: []
+  failing: [{name: ok-1}, {name: bad, fail: true}, {name: ok-2}]
+metadata: {source: golden}
+process:
+  steps:
+    - id: over_activity
+      type: for_each
+      items: "{{input.things}}"
+      step:
+        type: activity
+        activity: golden_echo_activity
+        args:
+          - {whole: "{{item}}", name: "{{item.name}}", missing: "{{item.missing}}", input: "{{input.single}}"}
+        timeout: 20
+        retry: {max_attempts: 2}
+    - id: over_results
+      type: for_each
+      items: "{{results.over_activity}}"
+      step:
+        type: activity
+        activity: golden_value_activity
+        args: ["{{item.args}}"]
+    - id: over_workflow
+      type: for_each
+      items: "{{input.things}}"
+      step:
+        type: workflow
+        workflow_name: GoldenChildWorkflow
+        args: {thing: "{{item.name}}"}
+        wait_for_result: false
+        parent_close_policy: abandon
+    - id: over_workflow_waiting
+      type: for_each
+      items: "{{input.things}}"
+      step:
+        type: workflow
+        workflow_name: GoldenChildWorkflow
+        args: "{{item}}"
+        execution_timeout: 300
+    - id: scalar_items
+      type: for_each
+      items: "{{input.single}}"
+      step: {type: activity, activity: golden_value_activity, args: ["{{item}}"]}
+    - id: none_items
+      type: for_each
+      items: "{{input.absent}}"
+      step: {type: activity, activity: golden_value_activity, args: ["{{item}}"]}
+    - id: empty_items
+      type: for_each
+      items: "{{input.empty}}"
+      step: {type: activity, activity: golden_value_activity, args: ["{{item}}"]}
+    - id: literal_items
+      type: for_each
+      items: [x, y]
+      step: {type: activity, activity: golden_value_activity, args: ["{{item}}"]}
+    - id: unsupported_pause
+      type: for_each
+      items: "{{input.things}}"
+      step: {type: pause, timeout: 10}
+    - id: unsupported_nested
+      type: for_each
+      items: "{{input.things}}"
+      step:
+        type: for_each
+        items: "{{item.name}}"
+        step: {type: activity, activity: golden_value_activity, args: ["{{item}}"]}
+    - id: no_inner_step
+      type: for_each
+      items: "{{input.things}}"
+    - id: inner_on_error
+      type: for_each
+      items: "{{input.failing}}"
+      on_error: continue
+      step:
+        type: activity
+        activity: golden_maybe_fail_activity
+        args: ["{{item}}"]
+        retry: {max_attempts: 1}
+        on_error: continue

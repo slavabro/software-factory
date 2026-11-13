@@ -1,0 +1,56 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  ParallelProcessWorkflow over every generic step type at once (decisions: parallel_decisions.yaml): all steps start in the first workflow task (one uuid4 each,
+  in order); `condition` is ignored; steps finish in the order the script releases them (gated stubs, resumes) and
+  results and completed_steps keep that order; an unknown type and a for_each over None finish at once.
+interpreters: [ParallelProcessWorkflow]
+input: {label: alpha}
+metadata: {source: golden}
+process:
+  steps:
+    - id: unknown
+      type: mystery_step_type
+    - id: none_loop
+      type: for_each
+      items: "{{input.absent}}"
+      step: {type: activity, activity: golden_value_activity}
+    - id: false_condition
+      type: activity
+      activity: golden_gate_activity
+      args: [{gate: g_false_condition}]
+      condition: "1 > 2"
+    - id: gated_activity
+      type: activity
+      activity: golden_gate_activity
+      args: [{gate: g_activity, label: "{{input.label}}"}]
+      timeout: 30
+      retry: {max_attempts: 2}
+    - id: child
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      args: {gate: g_child}
+      execution_timeout: 600
+    - id: loop
+      type: for_each
+      items: [{gate: g_loop_1}, {gate: g_loop_2}]
+      step: {type: activity, activity: golden_gate_activity, args: ["{{item}}"]}
+    - id: pause_timeout
+      type: pause
+      timeout: 600
+    - id: approval
+      type: approval
+script:
+  - probe_waiting: [pause_timeout, approval]
+  - query: started
+  - release: g_activity
+  - wait_completed: gated_activity
+  - release: g_loop_1
+  - update: {step_id: approval, data: {decision: approve}}
+  - release: g_false_condition
+  - wait_completed: false_condition
+  - release: g_loop_2
+  - wait_completed: loop
+  - release: g_child
+  - wait_completed: child
+  - query: before_last_pause
+  - update: {step_id: pause_timeout, data: {note: last}}
