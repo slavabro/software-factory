@@ -1,7 +1,7 @@
 {
   "case": "pause_and_approval.LinearProcessWorkflow",
   "workflow_id": "golden-pause_and_approval-linear",
-  "uuid4_draws": 8,
+  "uuid4_draws": 0,
   "commands": [
     {
       "command": "schedule_activity",
@@ -58,7 +58,11 @@
       "input": [
         {
           "gate": "g_after",
-          "note": "resumed by update"
+          "note": "resumed by update",
+          "late": {
+            "action": "expired",
+            "timeout_seconds": 120
+          }
         }
       ],
       "schedule_to_close_timeout": 315360000.0,
@@ -103,7 +107,11 @@
             "gate": "g_after",
             "params": {
               "gate": "g_after",
-              "note": "resumed by update"
+              "note": "resumed by update",
+              "late": {
+                "action": "expired",
+                "timeout_seconds": 120
+              }
             }
           }
         }
@@ -114,7 +122,7 @@
     {
       "query": "while_pause_update_waits",
       "answer": {
-        "current_step": null,
+        "current_step": "pause_update",
         "completed_steps": [
           "before"
         ],
@@ -168,6 +176,9 @@
       }
     },
     {
+      "signal": "pause_expires"
+    },
+    {
       "signal": "pause_signalled_early"
     },
     {
@@ -179,7 +190,7 @@
     {
       "query": "after_signals",
       "answer": {
-        "current_step": null,
+        "current_step": "after",
         "completed_steps": [
           "before",
           "pause_update",
@@ -254,7 +265,11 @@
             "gate": "g_after",
             "params": {
               "gate": "g_after",
-              "note": "resumed by update"
+              "note": "resumed by update",
+              "late": {
+                "action": "expired",
+                "timeout_seconds": 120
+              }
             }
           }
         }

@@ -24,10 +24,13 @@ used or not). A uuid not drawn by the workflow becomes `<uuid?n>`, numbered by f
 which draw named which child, and how many draws the run made.
 
 Workflow task failures (`outcome: task_failed`): the SDK retries the task until the run is terminated; the first
-failure is kept as its exception type, plus its message only when the engine itself wrote it
-(`GoldenHarness.stable_task_failure_messages`, by default `ENGINE_TASK_FAILURE_MESSAGES`). A message Python or the
-SDK writes (an `AttributeError` on None, a wrong argument count) changes with a CPython or temporalio upgrade while
-the engine does the same thing, so it is not recorded.
+failure is kept as its exception type, plus its message only when it full-matches one the product names as its own
+(`GoldenHarness.stable_task_failure_messages`; the engine itself fails runs, not tasks, so it names none). A message
+Python or the SDK writes (an `AttributeError` on None, a wrong argument count) changes with a CPython or temporalio
+upgrade while the code does the same thing, so it is not recorded.
+
+Recording: a test that finds `GOLDEN_RECORD=1` in its environment writes each case's recordings from the current
+code before comparing (`record_case`); review the diff of `recorded/` in the PR.
 
 A process file has these keys:
 
@@ -52,6 +55,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import re
 import uuid
@@ -88,12 +92,12 @@ PROBE_STEP = "__golden_probe__"
 POLL_SECONDS = 0.05
 WAIT_LIMIT_SECONDS = 30
 
-# Workflow-task failure messages the engine writes itself (factory_runtime/process/base.py, steps.py), as full-match
-# patterns: these are kept in a golden; any other message is not (module docstring).
-ENGINE_TASK_FAILURE_MESSAGES: tuple[str, ...] = (
-    re.escape("Process definition is None"),
-    r"Activity step \S+ missing 'activity' key",
-)
+# Workflow-task failure messages the engine writes itself, as full-match patterns: these are kept in a golden; any
+# other message is not (module docstring). None since v0.8: a definition the engine can't run fails the run.
+ENGINE_TASK_FAILURE_MESSAGES: tuple[str, ...] = ()
+
+# Set to 1 to write each case's recordings from the current code before comparing (`record_case`).
+RECORD_ENV = "GOLDEN_RECORD"
 
 
 def default_workflow_runner() -> WorkflowRunner:
@@ -459,6 +463,18 @@ class GoldenHarness:
         expected = {f"{case_id(*case)}.{kind}.json" for case in self.cases() for kind in ("history", "golden")}
         present = {path.name for path in self.recorded_dir.glob("*.json")}
         return sorted(expected - present), sorted(present - expected)
+
+    @staticmethod
+    def recording() -> bool:
+        """Whether this test run records (`GOLDEN_RECORD=1`)."""
+        return os.environ.get(RECORD_ENV) == "1"
+
+    async def record_case(self, env: WorkflowEnvironment, name: str, spec: Mapping[str, Any], interpreter: str) -> None:
+        """Run the case on the current code and save its history and golden (a deliberate re-recording)."""
+        recorded = await self.run_case(env, name, spec, interpreter)
+        self.recorded_dir.mkdir(parents=True, exist_ok=True)
+        self.history_path(name, interpreter).write_text(recorded.history_json)
+        self.golden_path(name, interpreter).write_text(dump_golden(recorded.golden))
 
     async def replay_case(self, name: str, interpreter: str) -> WorkflowReplayResult:
         """Replay the saved history against the interpreter classes; return the replay result."""

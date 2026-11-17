@@ -1,0 +1,109 @@
+{
+ "events": [
+  {
+   "eventId": "1",
+   "eventTime": "2026-11-17T12:57:49.582Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+   "workflowExecutionStartedEventAttributes": {
+    "workflowType": {
+     "name": "LinearProcessWorkflow"
+    },
+    "taskQueue": {
+     "name": "process-engine-golden"
+    },
+    "input": {
+     "payloads": [
+      {
+       "metadata": {
+        "encoding": "YmluYXJ5L251bGw="
+       }
+      },
+      {
+       "metadata": {
+        "encoding": "anNvbi9wbGFpbg=="
+       },
+       "data": "e30="
+      },
+      {
+       "metadata": {
+        "encoding": "anNvbi9wbGFpbg=="
+       },
+       "data": "e30="
+      }
+     ]
+    },
+    "workflowExecutionTimeout": "315360000s",
+    "workflowRunTimeout": "315360000s",
+    "workflowTaskTimeout": "10s",
+    "originalExecutionRunId": "c4e3c2b2-405c-4b98-8f81-bd201c1bfec5",
+    "identity": "golden-worker",
+    "firstExecutionRunId": "c4e3c2b2-405c-4b98-8f81-bd201c1bfec5",
+    "attempt": 1,
+    "firstWorkflowTaskBackoff": "0s",
+    "priority": {}
+   }
+  },
+  {
+   "eventId": "2",
+   "eventTime": "2026-11-17T12:57:49.582Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+   "workflowTaskScheduledEventAttributes": {
+    "taskQueue": {
+     "name": "process-engine-golden"
+    },
+    "startToCloseTimeout": "10s",
+    "attempt": 1
+   }
+  },
+  {
+   "eventId": "3",
+   "eventTime": "2026-11-17T12:57:49.583Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+   "workflowTaskStartedEventAttributes": {
+    "scheduledEventId": "2",
+    "identity": "golden-worker",
+    "historySizeBytes": "364"
+   }
+  },
+  {
+   "eventId": "4",
+   "eventTime": "2026-11-17T12:57:49.592Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+   "workflowTaskCompletedEventAttributes": {
+    "scheduledEventId": "2",
+    "identity": "golden-worker",
+    "binaryChecksum": "abc7498d407b60e7d59df451905d5089",
+    "sdkMetadata": {
+     "coreUsedFlags": [
+      4,
+      3,
+      1,
+      2
+     ],
+     "langUsedFlags": [
+      2
+     ],
+     "sdkName": "temporal-python",
+     "sdkVersion": "1.36.0"
+    },
+    "meteringMetadata": {}
+   }
+  },
+  {
+   "eventId": "5",
+   "eventTime": "2026-11-17T12:57:49.592Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_FAILED",
+   "workflowExecutionFailedEventAttributes": {
+    "failure": {
+     "message": "Invalid process definition: Process definition is None",
+     "stackTrace": "",
+     "applicationFailureInfo": {
+      "type": "ProcessDefinitionError",
+      "nonRetryable": true
+     }
+    },
+    "workflowTaskCompletedEventId": "3"
+   }
+  }
+ ]
+}

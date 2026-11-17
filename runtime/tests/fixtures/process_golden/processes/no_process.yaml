@@ -1,0 +1,7 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: A null process definition fails the run at once with a non-retryable ProcessDefinitionError.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, ParallelProcessWorkflow]
+input: {}
+metadata: {}
+outcome: failed
+process: null

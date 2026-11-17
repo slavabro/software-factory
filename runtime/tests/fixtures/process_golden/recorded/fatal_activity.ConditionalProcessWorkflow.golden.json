@@ -1,7 +1,7 @@
 {
   "case": "fatal_activity.ConditionalProcessWorkflow",
   "workflow_id": "golden-fatal_activity-conditional",
-  "uuid4_draws": 2,
+  "uuid4_draws": 0,
   "commands": [
     {
       "command": "schedule_activity",

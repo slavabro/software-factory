@@ -1,12 +1,33 @@
 {
   "case": "fatal_child.ConditionalProcessWorkflow",
   "workflow_id": "golden-fatal_child-conditional",
-  "uuid4_draws": 2,
+  "uuid4_draws": 1,
   "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        "first"
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenFailingChildWorkflow",
-      "workflow_id": "GoldenFailingChildWorkflow_<uuid4#2>",
+      "workflow_id": "GoldenFailingChildWorkflow_<uuid4#1>",
       "task_queue": "process-engine-golden",
       "input": [
         {
@@ -43,8 +64,12 @@
       "query": "final",
       "answer": {
         "current_step": null,
-        "completed_steps": [],
-        "results": {}
+        "completed_steps": [
+          "first"
+        ],
+        "results": {
+          "first": "first"
+        }
       }
     }
   ]

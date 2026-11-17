@@ -86,9 +86,10 @@ class ProcessInterpreterTest(TempRoot):
 
 class LoadProcessTest(TempRoot):
     def test_loads_relative_to_the_root(self):
-        self.write("processes/p.yaml", "name: P\nsteps:\n  - id: a\n    type: activity\n")
+        self.write("processes/p.yaml", "name: P\nsteps:\n  - id: a\n    type: activity\n    activity: x\n")
         self.assertEqual(
-            load_process("processes/p.yaml", self.root), {"name": "P", "steps": [{"id": "a", "type": "activity"}]}
+            load_process("processes/p.yaml", self.root),
+            {"name": "P", "steps": [{"id": "a", "type": "activity", "activity": "x"}]},
         )
         self.assertEqual(load_process(Path("processes/p.yaml"), self.root)["name"], "P")
 

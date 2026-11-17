@@ -1,4 +1,4 @@
-"""The process engine against a real (time-skipping) test server: the four interpreters as a product declares them
+"""The process engine against a real (time-skipping) test server: the three interpreters as a product declares them
 (tests/process_workflows.py), step policies, for_each, the query and the resume_step update and signal, a result
 over the payload limit, and the plug-in step contract (per-run state fetched once, unique ids inside for_each,
 REQUEST_CANCEL children). Ported from FamilyOffice's engine tests."""
@@ -21,7 +21,6 @@ from tests.process_workflows import (
     DEFAULTS_ACTIVITY,
     PROCESS_WORKFLOWS,
     ConditionalProcessWorkflow,
-    HybridProcessWorkflow,
     LinearProcessWorkflow,
     ParallelProcessWorkflow,
     RecordingChild,
@@ -223,11 +222,14 @@ class LinearTest(ProcessServerCase):
             result = await self.run_process(LinearProcessWorkflow.run, {"steps": []})
         self.assertEqual(result, {})
 
-    async def test_linear_none_process_def_raises(self):
-        # ValueError fails the workflow task (retried), so the run ends by its execution timeout.
+    async def test_linear_none_process_def_fails_the_run(self):
         async with self.worker([]):
-            with self.assertRaises(WorkflowFailureError):
-                await self.run_process(LinearProcessWorkflow.run, None, execution_timeout=timedelta(seconds=5))
+            with self.assertRaises(WorkflowFailureError) as caught:
+                await self.run_process(LinearProcessWorkflow.run, None, execution_timeout=timedelta(seconds=30))
+        cause = caught.exception.cause
+        self.assertIsInstance(cause, ApplicationError)
+        self.assertEqual((cause.type, cause.non_retryable), ("ProcessDefinitionError", True))
+        self.assertIn("Process definition is None", cause.message)
 
     async def test_linear_step_references_previous(self):
         @activity.defn(name="producer_activity")
@@ -310,38 +312,6 @@ class ConditionalTest(ProcessServerCase):
         self.assertIn("step_a", result)
         self.assertIn("step_b", result)
         self.assertNotIn("step_c", result)
-
-
-# ===========================================================================
-# Hybrid (runs exactly like Conditional)
-# ===========================================================================
-
-
-class HybridTest(ProcessServerCase):
-    async def test_hybrid_condition_support(self):
-        process_def = {
-            "steps": [
-                activity_step("step_a", "step_a_activity"),
-                activity_step("step_b", "step_b_activity", condition="{{results.step_a}} == 'step_a_result'"),
-            ]
-        }
-        async with self.worker([step_a(), step_b()]):
-            result = await self.run_process(HybridProcessWorkflow.run, process_def)
-        self.assertIn("step_a", result)
-        self.assertIn("step_b", result)
-
-    async def test_hybrid_all_steps_no_conditions(self):
-        process_def = {"steps": [activity_step("step_a", "step_a_activity"), activity_step("step_b", "step_b_activity")]}
-        async with self.worker([step_a(), step_b()]):
-            result = await self.run_process(HybridProcessWorkflow.run, process_def)
-        self.assertIn("step_a", result)
-        self.assertIn("step_b", result)
-
-    async def test_hybrid_skips_false_condition(self):
-        process_def = {"steps": [activity_step("step_a", "step_a_activity", condition="False")]}
-        async with self.worker([step_a()]):
-            result = await self.run_process(HybridProcessWorkflow.run, process_def)
-        self.assertNotIn("step_a", result)
 
 
 # ===========================================================================
@@ -439,7 +409,6 @@ class QueryAndHandlersTest(ProcessServerCase):
         process_def = {"steps": [activity_step("step_a", "fast_step_a")]}
         runs = [
             (ConditionalProcessWorkflow.run, "investment"),
-            (HybridProcessWorkflow.run, "risk"),
             (ParallelProcessWorkflow.run, "data"),
         ]
         async with self.worker([fast_step_a]):
@@ -559,13 +528,14 @@ class ForEachTest(ProcessServerCase):
             with self.assertRaises(WorkflowFailureError):
                 await self.run_process(LinearProcessWorkflow.run, for_each_process())
 
-    async def test_inner_step_on_error_ignored_with_warning(self):
+    async def test_inner_step_on_error_is_rejected(self):
         captured: list = []
         process_def = for_each_process(inner_step_overrides={"on_error": "continue"})
         async with self.worker([produce_items([{"x": 1}, {"x": 2}]), capture("for_each_test_activity", captured)]):
-            result = await self.run_process(LinearProcessWorkflow.run, process_def)
-        self.assertEqual(len(captured), 2)
-        self.assertEqual(len(result["fan_out"]), 2)
+            with self.assertRaises(WorkflowFailureError) as caught:
+                await self.run_process(LinearProcessWorkflow.run, process_def)
+        self.assertIn("`on_error:` belongs on the for_each step", str(caught.exception.cause))
+        self.assertEqual(captured, [])
 
     async def test_abandon_policy_children_survive_parent(self):
         process_def = for_each_process(
@@ -584,13 +554,14 @@ class ForEachTest(ProcessServerCase):
         self.assertIn("child_workflow_id", fan_out[1])
         self.assertNotEqual(fan_out[0]["child_workflow_id"], fan_out[1]["child_workflow_id"])
 
-    async def test_unknown_policy_uses_default_terminate(self):
+    async def test_unknown_policy_is_rejected(self):
         process_def = for_each_process(
             inner_step_type="workflow", inner_step_overrides={"parent_close_policy": "bogus_value"}
         )
         async with self.worker([produce_items([{"id": "x"}])], PROCESS_WORKFLOWS + [MockChildWorkflow]):
-            result = await self.run_process(LinearProcessWorkflow.run, process_def)
-        self.assertEqual(len(result["fan_out"]), 1)
+            with self.assertRaises(WorkflowFailureError) as caught:
+                await self.run_process(LinearProcessWorkflow.run, process_def)
+        self.assertIn("unknown `parent_close_policy: bogus_value`", str(caught.exception.cause))
 
     async def test_fan_out_starts_a_child_per_mapped_item(self):
         """produce mapped items -> for_each fire-and-forget children (abandon), on_error: continue."""
@@ -781,7 +752,7 @@ class PluginStepTest(ProcessServerCase):
         self.assertEqual(len(calls), 1, "per-run state fetched once")
         first, second = result["gate_a"], result["gate_b"]
         self.assertEqual(first["seen"]["label"], "default label")
-        self.assertEqual(second["seen"]["label"], "explicit {{input.x}}")  # only whole strings resolve
+        self.assertEqual(second["seen"]["label"], "explicit 1")  # a placeholder inside text is filled in
         self.assertEqual(first["seen"]["department"], "ops")
         self.assertEqual(first["seen"]["run_metadata"], {"started_by": "test"})
         self.assertIsNone(first["seen"]["item"])
@@ -794,6 +765,14 @@ class PluginStepTest(ProcessServerCase):
         self.assertRegex(ids[0], rf"^fan_{UUID}\[0\]-")
         self.assertRegex(ids[1], rf"^fan_{UUID}\[1\]-")
         self.assertEqual(re.sub(r"\[\d\]", "", ids[0]), re.sub(r"\[\d\]", "", ids[1]))  # one uuid for the step
+
+    async def test_parallel_steps_share_one_fetch(self):
+        calls: list = []
+        process_def = {"steps": [{"id": "gate_a", "type": "fetch_once"}, {"id": "gate_b", "type": "fetch_once"}]}
+        async with self.worker([defaults_activity(calls)]):
+            result = await self.run_process(ParallelProcessWorkflow.run, process_def)
+        self.assertEqual(len(calls), 1, "parallel steps await the same in-flight fetch")
+        self.assertEqual({r["seen"]["label"] for r in result.values()}, {"default label"})
 
     async def test_every_run_fetches_its_own_state(self):
         calls: list = []

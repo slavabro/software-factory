@@ -1,7 +1,7 @@
 {
   "case": "signal_with_start.ConditionalProcessWorkflow",
   "workflow_id": "golden-signal_with_start-conditional",
-  "uuid4_draws": 3,
+  "uuid4_draws": 0,
   "commands": [
     {
       "command": "schedule_activity",

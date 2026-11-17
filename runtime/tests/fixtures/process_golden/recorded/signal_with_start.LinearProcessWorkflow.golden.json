@@ -1,7 +1,7 @@
 {
   "case": "signal_with_start.LinearProcessWorkflow",
   "workflow_id": "golden-signal_with_start-linear",
-  "uuid4_draws": 3,
+  "uuid4_draws": 0,
   "commands": [
     {
       "command": "schedule_activity",

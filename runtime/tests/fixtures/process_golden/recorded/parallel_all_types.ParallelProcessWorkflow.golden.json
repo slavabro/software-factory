@@ -1,7 +1,7 @@
 {
   "case": "parallel_all_types.ParallelProcessWorkflow",
   "workflow_id": "golden-parallel_all_types-parallel",
-  "uuid4_draws": 9,
+  "uuid4_draws": 1,
   "commands": [
     {
       "command": "schedule_activity",
@@ -10,7 +10,7 @@
       "task_queue": "process-engine-golden",
       "input": [
         {
-          "gate": "g_false_condition"
+          "gate": "g_true_condition"
         }
       ],
       "schedule_to_close_timeout": 315360000.0,
@@ -53,7 +53,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#6>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#1>",
       "task_queue": "process-engine-golden",
       "input": [
         {
@@ -131,7 +131,6 @@
       "command": "complete_workflow",
       "result": [
         {
-          "unknown": null,
           "none_loop": [],
           "gated_activity": {
             "gate": "g_activity",
@@ -143,10 +142,10 @@
           "approval": {
             "decision": "approve"
           },
-          "false_condition": {
-            "gate": "g_false_condition",
+          "true_condition": {
+            "gate": "g_true_condition",
             "params": {
-              "gate": "g_false_condition"
+              "gate": "g_true_condition"
             }
           },
           "loop": [
@@ -180,13 +179,11 @@
     {
       "query": "started",
       "answer": {
-        "current_step": null,
+        "current_step": "true_condition",
         "completed_steps": [
-          "unknown",
           "none_loop"
         ],
         "results": {
-          "unknown": null,
           "none_loop": []
         }
       }
@@ -200,7 +197,6 @@
           "decision": "approve"
         },
         "completed_steps": [
-          "unknown",
           "none_loop",
           "gated_activity",
           "approval"
@@ -208,20 +204,16 @@
       }
     },
     {
-      "query": "before_last_pause",
+      "query": "after_true_condition",
       "answer": {
-        "current_step": null,
+        "current_step": "child",
         "completed_steps": [
-          "unknown",
           "none_loop",
           "gated_activity",
           "approval",
-          "false_condition",
-          "loop",
-          "child"
+          "true_condition"
         ],
         "results": {
-          "unknown": null,
           "none_loop": [],
           "gated_activity": {
             "gate": "g_activity",
@@ -233,10 +225,43 @@
           "approval": {
             "decision": "approve"
           },
-          "false_condition": {
-            "gate": "g_false_condition",
+          "true_condition": {
+            "gate": "g_true_condition",
             "params": {
-              "gate": "g_false_condition"
+              "gate": "g_true_condition"
+            }
+          }
+        }
+      }
+    },
+    {
+      "query": "before_last_pause",
+      "answer": {
+        "current_step": "pause_timeout",
+        "completed_steps": [
+          "none_loop",
+          "gated_activity",
+          "approval",
+          "true_condition",
+          "loop",
+          "child"
+        ],
+        "results": {
+          "none_loop": [],
+          "gated_activity": {
+            "gate": "g_activity",
+            "params": {
+              "gate": "g_activity",
+              "label": "alpha"
+            }
+          },
+          "approval": {
+            "decision": "approve"
+          },
+          "true_condition": {
+            "gate": "g_true_condition",
+            "params": {
+              "gate": "g_true_condition"
             }
           },
           "loop": [
@@ -271,11 +296,10 @@
           "note": "last"
         },
         "completed_steps": [
-          "unknown",
           "none_loop",
           "gated_activity",
           "approval",
-          "false_condition",
+          "true_condition",
           "loop",
           "child",
           "pause_timeout"
@@ -287,17 +311,15 @@
       "answer": {
         "current_step": null,
         "completed_steps": [
-          "unknown",
           "none_loop",
           "gated_activity",
           "approval",
-          "false_condition",
+          "true_condition",
           "loop",
           "child",
           "pause_timeout"
         ],
         "results": {
-          "unknown": null,
           "none_loop": [],
           "gated_activity": {
             "gate": "g_activity",
@@ -309,10 +331,10 @@
           "approval": {
             "decision": "approve"
           },
-          "false_condition": {
-            "gate": "g_false_condition",
+          "true_condition": {
+            "gate": "g_true_condition",
             "params": {
-              "gate": "g_false_condition"
+              "gate": "g_true_condition"
             }
           },
           "loop": [

@@ -2,7 +2,7 @@ scope: generic  # generic: built-in step types only; decision: uses FamilyOffice
 description: >
   A resume_step signal delivered with the start (signal-with-start) is kept until its pause step is reached and
   consumed there, with and without a timeout on the step; empty and missing input.
-interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
 input: null
 start_signal: {step_id: gate, data: {note: delivered with the start}}
 process:

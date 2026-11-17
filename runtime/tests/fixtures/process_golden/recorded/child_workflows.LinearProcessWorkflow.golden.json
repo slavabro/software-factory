@@ -1,17 +1,18 @@
 {
   "case": "child_workflows.LinearProcessWorkflow",
   "workflow_id": "golden-child_workflows-linear",
-  "uuid4_draws": 22,
+  "uuid4_draws": 9,
   "commands": [
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#2>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#1>",
       "task_queue": "process-engine-golden",
       "input": [
         {
           "label": "alpha",
-          "missing": null
+          "missing": null,
+          "text": "for alpha"
         }
       ],
       "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
@@ -34,7 +35,8 @@
         {
           "from_previous": {
             "label": "alpha",
-            "missing": null
+            "missing": null,
+            "text": "for alpha"
           }
         }
       ],
@@ -52,7 +54,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#5>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#2>",
       "task_queue": "process-engine-golden",
       "input": [
         [
@@ -74,7 +76,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#7>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#3>",
       "task_queue": "process-engine-golden",
       "input": [
         {}
@@ -93,7 +95,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#9>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#4>",
       "task_queue": "process-engine-golden",
       "input": [
         {
@@ -114,7 +116,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#11>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#5>",
       "task_queue": "process-engine-golden",
       "input": [
         {}
@@ -133,7 +135,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#13>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#6>",
       "task_queue": "process-engine-golden",
       "input": [
         {}
@@ -152,26 +154,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#15>",
-      "task_queue": "process-engine-golden",
-      "input": [
-        {}
-      ],
-      "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
-      "workflow_execution_timeout": 0.0,
-      "workflow_run_timeout": 0.0,
-      "workflow_task_timeout": 10.0,
-      "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
-      "retry_policy": null,
-      "cron_schedule": "",
-      "memo": [],
-      "search_attributes": [],
-      "summary": null
-    },
-    {
-      "command": "start_child_workflow",
-      "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#17>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#7>",
       "task_queue": "process-engine-golden",
       "input": [
         {}
@@ -190,7 +173,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenFailingChildWorkflow",
-      "workflow_id": "GoldenFailingChildWorkflow_<uuid4#19>",
+      "workflow_id": "GoldenFailingChildWorkflow_<uuid4#8>",
       "task_queue": "process-engine-golden",
       "input": [
         {}
@@ -209,7 +192,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenSlowChildWorkflow",
-      "workflow_id": "GoldenSlowChildWorkflow_<uuid4#21>",
+      "workflow_id": "GoldenSlowChildWorkflow_<uuid4#9>",
       "task_queue": "process-engine-golden",
       "input": [
         {}
@@ -231,7 +214,7 @@
       "activity_id": "1",
       "task_queue": "process-engine-golden",
       "input": [
-        "GoldenChildWorkflow_<uuid4#9>"
+        "GoldenChildWorkflow_<uuid4#4>"
       ],
       "schedule_to_close_timeout": 315360000.0,
       "schedule_to_start_timeout": 315360000.0,
@@ -254,7 +237,8 @@
             "child": "GoldenChildWorkflow",
             "received": {
               "label": "alpha",
-              "missing": null
+              "missing": null,
+              "text": "for alpha"
             }
           },
           "child_explicit": {
@@ -262,7 +246,8 @@
             "received": {
               "from_previous": {
                 "label": "alpha",
-                "missing": null
+                "missing": null,
+                "text": "for alpha"
               }
             }
           },
@@ -278,7 +263,7 @@
             "received": {}
           },
           "fire_and_forget": {
-            "child_workflow_id": "GoldenChildWorkflow_<uuid4#9>"
+            "child_workflow_id": "GoldenChildWorkflow_<uuid4#4>"
           },
           "policy_terminate": {
             "child": "GoldenChildWorkflow",
@@ -288,17 +273,13 @@
             "child": "GoldenChildWorkflow",
             "received": {}
           },
-          "policy_invalid": {
-            "child": "GoldenChildWorkflow",
-            "received": {}
-          },
           "with_execution_timeout": {
             "child": "GoldenChildWorkflow",
             "received": {}
           },
           "child_failure": null,
           "child_times_out": null,
-          "last": "GoldenChildWorkflow_<uuid4#9>"
+          "last": "GoldenChildWorkflow_<uuid4#4>"
         }
       ]
     }
@@ -316,7 +297,6 @@
           "fire_and_forget",
           "policy_terminate",
           "policy_request_cancel",
-          "policy_invalid",
           "with_execution_timeout",
           "child_failure",
           "child_times_out",
@@ -327,7 +307,8 @@
             "child": "GoldenChildWorkflow",
             "received": {
               "label": "alpha",
-              "missing": null
+              "missing": null,
+              "text": "for alpha"
             }
           },
           "child_explicit": {
@@ -335,7 +316,8 @@
             "received": {
               "from_previous": {
                 "label": "alpha",
-                "missing": null
+                "missing": null,
+                "text": "for alpha"
               }
             }
           },
@@ -351,7 +333,7 @@
             "received": {}
           },
           "fire_and_forget": {
-            "child_workflow_id": "GoldenChildWorkflow_<uuid4#9>"
+            "child_workflow_id": "GoldenChildWorkflow_<uuid4#4>"
           },
           "policy_terminate": {
             "child": "GoldenChildWorkflow",
@@ -361,17 +343,13 @@
             "child": "GoldenChildWorkflow",
             "received": {}
           },
-          "policy_invalid": {
-            "child": "GoldenChildWorkflow",
-            "received": {}
-          },
           "with_execution_timeout": {
             "child": "GoldenChildWorkflow",
             "received": {}
           },
           "child_failure": null,
           "child_times_out": null,
-          "last": "GoldenChildWorkflow_<uuid4#9>"
+          "last": "GoldenChildWorkflow_<uuid4#4>"
         }
       }
     }

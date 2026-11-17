@@ -1,0 +1,26 @@
+{
+  "case": "no_process.ConditionalProcessWorkflow",
+  "workflow_id": "golden-no_process-conditional",
+  "uuid4_draws": 0,
+  "commands": [
+    {
+      "command": "fail_workflow",
+      "failure": {
+        "message": "Invalid process definition: Process definition is None",
+        "info": "application_failure_info",
+        "type": "ProcessDefinitionError",
+        "non_retryable": true
+      }
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [],
+        "results": {}
+      }
+    }
+  ]
+}

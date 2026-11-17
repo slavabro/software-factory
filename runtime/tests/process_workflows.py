@@ -1,7 +1,7 @@
-"""Process workflows as a product declares them: the four interpreters on `ProcessWorkflowBase`, with one extra
+"""Process workflows as a product declares them: the three interpreters on `ProcessWorkflowBase`, with one extra
 step type plugged in. `fetch_once` stands in for a product's decision step: it fetches per-run defaults through an
-activity at most once per run (in `wf.step_state`), then starts a child whose id is built from the step's unique id,
-so it runs inside `for_each` with `{base}_{uuid}[i]` ids."""
+activity at most once per run (`wf.once`, also when parallel steps ask at the same time), then starts a child whose
+id is built from the step's unique id, so it runs inside `for_each` with `{base}_{uuid}[i]` ids."""
 
 from datetime import timedelta
 from typing import Any, Dict, Optional
@@ -22,14 +22,16 @@ RECORD_CHILD = "RecordingChild"
 
 
 async def fetch_once_step(wf: ProcessWorkflowBase, step: dict[str, Any], ctx: StepContext) -> Any:
-    if wf.step_state.get("defaults") is None:
-        wf.step_state["defaults"] = await workflow.execute_activity(
+    async def fetch() -> dict:
+        result: dict = await workflow.execute_activity(
             DEFAULTS_ACTIVITY,
             start_to_close_timeout=timedelta(seconds=10),
             retry_policy=RetryPolicy(maximum_attempts=DEFAULT_STEP_MAX_ATTEMPTS),
             result_type=dict,
         )
-    defaults = wf.step_state["defaults"]
+        return result
+
+    defaults = await wf.once("defaults", fetch)
     department = ((ctx.process_def or {}).get("metadata") or {}).get("department")
     payload = {
         "label": ctx.resolve(step.get("label", defaults.get("label"))),
@@ -68,20 +70,6 @@ class LinearProcessWorkflow(ProcessWorkflowBase):
 
 @workflow.defn(name="ConditionalProcessWorkflow")
 class ConditionalProcessWorkflow(ProcessWorkflowBase):
-    step_types = STEP_TYPES
-
-    @workflow.run
-    async def run(
-        self,
-        process_def: Dict[str, Any],
-        input_data: Optional[Dict[str, Any]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        return await self.run_conditional(process_def, input_data, metadata)
-
-
-@workflow.defn(name="HybridProcessWorkflow")
-class HybridProcessWorkflow(ProcessWorkflowBase):
     step_types = STEP_TYPES
 
     @workflow.run
@@ -133,7 +121,6 @@ class SlowChild:
 PROCESS_WORKFLOWS = [
     LinearProcessWorkflow,
     ConditionalProcessWorkflow,
-    HybridProcessWorkflow,
     ParallelProcessWorkflow,
     RecordingChild,
     EchoChild,
