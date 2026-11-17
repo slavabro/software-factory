@@ -13,6 +13,8 @@ import tomllib
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
+from . import costconfig
+
 CONFIG_NAME = ".factory.toml"
 
 # What an unattended agent may run: narrow on purpose. Merging, pushing the default branch and anything that
@@ -98,6 +100,7 @@ class Config:
     report_with: str = ""  # shell command run with {file} = the run's digest; empty = path printed to the log
     upgrade: Upgrade = field(default_factory=Upgrade)
     extra_teams: dict[str, Team] = field(default_factory=dict)  # [teams.<name>]
+    cost: costconfig.CostConfig = field(default_factory=costconfig.CostConfig)  # [cost] [departments.*] [[budgets]]
 
     def teams(self) -> dict[str, Team]:
         """Every team the engine runs here. The upgrade capability is the team `upgrade`, configured by [upgrade]."""
@@ -124,14 +127,18 @@ SECTIONS = {
     "upgrade": {f.name for f in fields(Upgrade)},
     "teams": set(),  # one table per team, keys TEAM_KEYS
 }
+COST_SECTIONS = costconfig.SECTIONS  # [cost], [departments.*], [[budgets]]: sfactory/costconfig.py checks them
 TEAM_KEYS = {f.name for f in fields(Team)}
 TEAM_NAME = re.compile(r"[a-z][a-z0-9-]*")
 
 
 def _check(raw: dict, path: Path) -> None:
     for section, body in raw.items():
+        if section in COST_SECTIONS:
+            continue  # parse() checks them through costconfig
         if section not in SECTIONS:
-            raise ConfigError(f"{path}: unknown section [{section}] (known: {', '.join(sorted(SECTIONS))})")
+            known = sorted(set(SECTIONS) | set(COST_SECTIONS))
+            raise ConfigError(f"{path}: unknown section [{section}] (known: {', '.join(known)})")
         if not isinstance(body, dict):
             raise ConfigError(f"{path}: [{section}] must be a table")
         if section == "teams":
@@ -221,4 +228,8 @@ def parse(root: Path, text: str | None, path: Path) -> Config:
     for key, value in raw.get("upgrade", {}).items():
         setattr(cfg.upgrade, key, value)
     cfg.extra_teams = {name: Team(**body) for name, body in raw.get("teams", {}).items()}
+    try:
+        cfg.cost = costconfig.parse(raw, path, owner_repo=cfg.name)
+    except costconfig.CostConfigError as exc:
+        raise ConfigError(str(exc)) from None
     return cfg

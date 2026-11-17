@@ -9,6 +9,8 @@
     factory run CAPABILITY [--dry-run]     run a capability once, here and now, in a fresh worktree (e.g. `upgrade`);
                                            scheduled and event-driven runs belong to the engine
     factory engine ...                     the factory engine: install, upgrade, status, run-now … (`factory engine --help`)
+    factory cost ...                       agent spend by department, agent, task, repo, session or model; budgets;
+                                           the costs page (`factory cost --help`, sfactory/cost.py)
 
 Every command takes --repo PATH (default: the git root of the current directory).
 """
@@ -68,6 +70,10 @@ def main(argv: list[str] | None = None) -> int:
         return task(argv[lead + 1:], Path(argv[1]) if lead else None)
     if argv[:1] == ["engine"]:  # machine-wide, not per repo: it takes its own --repo options
         return engine.main(argv[1:])
+    if argv[:1] == ["cost"]:  # machine-wide too: every repo's spend
+        from . import cost
+
+        return cost.main(argv[1:])
     ap = argparse.ArgumentParser(prog="factory", description=__doc__.split("\n\n")[0])
     ap.add_argument("--repo", type=Path)
     sub = ap.add_subparsers(dest="cmd", required=True)

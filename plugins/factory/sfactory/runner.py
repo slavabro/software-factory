@@ -182,7 +182,14 @@ def run(cfg: Config, capability: str, dry_run: bool = False, keep: bool = False)
         print("setup     " + (" && ".join(rcfg.worktree_setup) or "—"))
         print(f"agent     {shlex.join(agent_argv(rcfg, PROMPTS[capability]))}\ntimeout   {rcfg.agent_timeout_minutes} min")
         print(f"log       {log_path}\nreport    {report}")
+        print("budget    " + ("; ".join(budget_blockers(cfg, capability)) or "within every hard limit"))
         return 0
+    stopped = budget_blockers(cfg, capability)
+    if stopped:
+        for reason in stopped:
+            print(f"factory: {capability} run for {cfg.name} not started — budget {reason}")
+        print("factory: `factory cost budgets` shows every budget; raise the limit or wait for the window to reset")
+        return 1
     runs.mkdir(parents=True, exist_ok=True)
     logs.mkdir(parents=True, exist_ok=True)
     if not acquire(lock):
@@ -216,6 +223,13 @@ def run(cfg: Config, capability: str, dry_run: bool = False, keep: bool = False)
                 print("factory: " + cleanup(cfg, worktree, branch, log))
         lock.unlink(missing_ok=True)
         signal.signal(signal.SIGTERM, previous)
+
+
+def budget_blockers(cfg: Config, capability: str) -> list[str]:
+    """Hard budgets over their limit that cover this run (sfactory/cost.py owns the rule)."""
+    from . import cost  # here: cost imports usage, which imports this module
+
+    return cost.run_blockers(cfg.root, capability)
 
 
 def agent_output_path(log_path: Path) -> Path:
