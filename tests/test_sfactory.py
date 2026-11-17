@@ -205,7 +205,8 @@ class GuardTests(unittest.TestCase):
                     "git push", "git push origin --delete factory/x", "git -C . push origin main", "git -c a=b push origin main",
                     "gh -R o/r pr merge 3", "gh api graphql -f query='mutation { mergePullRequest(input:{}) { clientMutationId } }'",
                     "find . -name x -exec rm {} ;", "git push -u origin HEAD"]:
-            self.assertIsNotNone(guard.check(cmd, "main"), cmd)
+            with tempfile.TemporaryDirectory() as d:  # not this checkout: its own branch may be factory/*
+                self.assertIsNotNone(guard.check(cmd, "main", d), cmd)
 
     def test_head_push_only_from_a_factory_branch(self):
         with tempfile.TemporaryDirectory() as d:
