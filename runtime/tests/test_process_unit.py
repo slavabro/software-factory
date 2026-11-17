@@ -8,9 +8,12 @@ from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from temporalio.common import RetryPolicy
+from temporalio.exceptions import ApplicationError
 
 from factory_runtime.process import (
     BUILTIN_STEP_TYPES,
+    PROCESS_DEFINITION_ERROR,
+    ConditionError,
     ProcessWorkflowBase,
     StepContext,
     StepType,
@@ -39,10 +42,9 @@ def mock_workflow():
             p.stop()
 
 
-def ctx(results=None, input_data=None, unique_id="step_1", base_id="step", item=None):
+def ctx(results=None, input_data=None, base_id="step", item=None):
     return StepContext(
         base_id=base_id,
-        unique_id=unique_id,
         results=results if results is not None else {},
         input=input_data if input_data is not None else {},
         process_def={},
@@ -253,9 +255,15 @@ class EvaluateConditionTest(unittest.TestCase):
     def test_multiple_top_level_and(self):
         self.assertIs(self._eval("{{results.a}} > 0 and {{results.b}} > 0", {"a": 5, "b": 10}), True)
 
-    def test_dict_result_is_substituted_as_str(self):
-        # str(dict) is substituted, the expression does not compare equal: False
-        self.assertIs(self._eval("{{results.step_a}} == 'x'", {"step_a": {"status": "x"}}), False)
+    def test_a_whole_dict_or_list_raises(self):
+        for value in ({"status": "x"}, [1, 2]):
+            with self.subTest(value=value), self.assertRaisesRegex(ConditionError, "name a field of it"):
+                self._eval("{{results.step_a}} == 'x'", {"step_a": value})
+
+    def test_an_expression_that_cant_be_evaluated_raises(self):
+        for condition in ("{{results.a}} ~~ 1", "__import__('os') == None", "{{env.x}} == 1"):
+            with self.subTest(condition=condition), self.assertRaises(ConditionError):
+                self._eval(condition, {"a": 1})
 
     def test_none_result(self):
         self.assertIs(self._eval("{{results.step_a}} == None", {"step_a": None}), True)
@@ -320,9 +328,49 @@ class ActivityStepTest(unittest.IsolatedAsyncioTestCase):
             await activity_step(ProcessWorkflowBase(), step, ctx(results={"step_a": "resolved_value"}))
         self.assertEqual(mock_wf.execute_activity.call_args.args, ("my_activity", "resolved_value"))
 
-    async def test_missing_activity_raises(self):
-        with mock_workflow(), self.assertRaisesRegex(ValueError, "missing 'activity' key"):
+    async def test_missing_activity_is_a_definition_error(self):
+        with mock_workflow(), self.assertRaisesRegex(ApplicationError, "missing 'activity' key") as caught:
             await activity_step(ProcessWorkflowBase(), {"args": []}, ctx())
+        self.assertEqual((caught.exception.type, caught.exception.non_retryable), (PROCESS_DEFINITION_ERROR, True))
+
+    async def test_args_one_element_a_dict_whole_a_value_or_none(self):
+        for args, expected in (
+            (["{{input.x}}"], ("a", 1)),
+            ({"k": "{{input.x}}"}, ("a", {"k": 1})),
+            ("{{input.x}}", ("a", 1)),
+            ([], ("a",)),
+            (None, ("a",)),
+        ):
+            with self.subTest(args=args):
+                step = {"activity": "a"} if args is None else {"activity": "a", "args": args}
+                with mock_workflow() as mock_wf:
+                    mock_wf.execute_activity = AsyncMock(return_value=None)
+                    await activity_step(ProcessWorkflowBase(), step, ctx(input_data={"x": 1}))
+                self.assertEqual(mock_wf.execute_activity.call_args.args, expected)
+
+    async def test_two_args_or_an_unknown_option_is_a_definition_error(self):
+        for step in ({"activity": "a", "args": [1, 2]}, {"activity": "a", "options": {"nope": 1}}):
+            with self.subTest(step=step), mock_workflow() as mock_wf:
+                mock_wf.execute_activity = AsyncMock(return_value=None)
+                with self.assertRaises(ApplicationError) as caught:
+                    await activity_step(ProcessWorkflowBase(), step, ctx())
+                self.assertEqual(caught.exception.type, PROCESS_DEFINITION_ERROR)
+                mock_wf.execute_activity.assert_not_called()
+
+    async def test_options_are_execute_activity_options_timeouts_in_seconds(self):
+        step = {
+            "activity": "a",
+            "args": [1],
+            "options": {"summary": "for {{input.x}}", "activity_id": "fixed", "schedule_to_close_timeout": 90},
+        }
+        with mock_workflow() as mock_wf:
+            mock_wf.execute_activity = AsyncMock(return_value=None)
+            await activity_step(ProcessWorkflowBase(), step, ctx(input_data={"x": "q"}))
+        kwargs = mock_wf.execute_activity.call_args.kwargs
+        self.assertEqual(
+            (kwargs["summary"], kwargs["activity_id"], kwargs["schedule_to_close_timeout"]),
+            ("for q", "fixed", timedelta(seconds=90)),
+        )
 
 
 # E. workflow step
@@ -433,7 +481,11 @@ class PauseTest(unittest.IsolatedAsyncioTestCase):
                 self.assertNotIn("timeout", mock_wf.wait_condition.call_args.kwargs)
 
 
-# G / H. dispatch: the step's type runs it, its result is stored once under the base id
+# G / H. dispatch: the step's type runs it, its result is stored once under its id
+
+
+def run_step(wf, step, input_data=None):
+    return wf._execute_step({"id": "base", **step}, input_data or {})
 
 
 class DispatchTest(unittest.IsolatedAsyncioTestCase):
@@ -442,46 +494,40 @@ class DispatchTest(unittest.IsolatedAsyncioTestCase):
             with self.subTest(step_type=step_type):
                 run = AsyncMock(return_value=f"{step_type}_result")
                 wf = with_steps(**{step_type: run})
-                results: dict = {}
                 with mock_workflow():
-                    result = await wf._execute_step({"type": step_type}, "base", "base_1", results, {})
+                    result = await run_step(wf, {"type": step_type})
                 self.assertEqual(result, f"{step_type}_result")
                 run.assert_called_once()
-                self.assertEqual(results, {"base": f"{step_type}_result"})
+                self.assertEqual(wf._workflow_results, {"base": f"{step_type}_result"})
 
     async def test_plugged_in_type_gets_wf_step_and_context(self):
         run = AsyncMock(return_value="decision_result")
         wf = with_steps(decision=run)
-        step = {"type": "decision"}
-        results: dict = {}
         with mock_workflow():
-            result = await wf._execute_step(step, "base", "base_1", results, {"k": 1})
+            result = await run_step(wf, {"type": "decision"}, {"k": 1})
         self.assertEqual(result, "decision_result")
         (called_wf, called_step, called_ctx), _ = run.call_args
         self.assertIs(called_wf, wf)
-        self.assertIs(called_step, step)
-        self.assertEqual((called_ctx.base_id, called_ctx.unique_id, called_ctx.input), ("base", "base_1", {"k": 1}))
-        self.assertIs(called_ctx.results, results)
+        self.assertEqual(called_step, {"id": "base", "type": "decision"})
+        self.assertEqual((called_ctx.base_id, called_ctx.input), ("base", {"k": 1}))
+        self.assertIs(called_ctx.results, wf._workflow_results)
         self.assertIsNone(called_ctx.item)
 
-    async def test_unknown_type_stores_none(self):
+    async def test_unknown_type_is_a_definition_error(self):
         wf = ProcessWorkflowBase()
-        results: dict = {}
-        with mock_workflow() as mock_wf:
-            result = await wf._execute_step({"type": "bogus"}, "base", "base_1", results, {})
-        self.assertIsNone(result)
-        self.assertEqual(results, {"base": None})
-        mock_wf.logger.warning.assert_called_once()
+        with mock_workflow(), self.assertRaises(ApplicationError) as caught:
+            await run_step(wf, {"type": "bogus", "on_error": "continue"})
+        self.assertEqual(caught.exception.type, PROCESS_DEFINITION_ERROR)
+        self.assertEqual(wf._workflow_results, {})
 
-    async def test_result_stored_once_under_the_base_id(self):
+    async def test_result_stored_once_under_the_step_id(self):
         # One copy per step: a second under the unique id doubled every process result.
         wf = with_steps(activity=AsyncMock(side_effect=["first", "second"]))
-        results: dict = {}
         with mock_workflow():
-            await wf._execute_step({"type": "activity"}, "base_id", "unique_1", results, {})
-            self.assertEqual(results, {"base_id": "first"})
-            await wf._execute_step({"type": "activity"}, "base_id", "unique_2", results, {})
-        self.assertEqual(results, {"base_id": "second"})
+            await run_step(wf, {"type": "activity"})
+            self.assertEqual(wf._workflow_results, {"base": "first"})
+            await run_step(wf, {"type": "activity"})
+        self.assertEqual(wf._workflow_results, {"base": "second"})
 
 
 # on_error: continue
@@ -489,37 +535,53 @@ class DispatchTest(unittest.IsolatedAsyncioTestCase):
 
 class OnErrorContinueTest(unittest.IsolatedAsyncioTestCase):
     async def test_continue_stores_none_and_proceeds(self):
-        for step_type in ("activity", "workflow"):
-            with self.subTest(step_type=step_type):
-                wf = with_steps(**{step_type: AsyncMock(side_effect=RuntimeError("boom"))})
-                results: dict = {}
+        for error in (RuntimeError("boom"), ApplicationError("boom", type="X")):
+            with self.subTest(error=error):
+                wf = with_steps(activity=AsyncMock(side_effect=error))
                 with mock_workflow():
-                    result = await wf._execute_step(
-                        {"type": step_type, "on_error": "continue"}, "test", "test_1", results, {}
-                    )
+                    result = await run_step(wf, {"type": "activity", "on_error": "continue"})
                 self.assertIsNone(result)
-                self.assertEqual(results, {"test": None})
+                self.assertEqual(wf._workflow_results, {"base": None})
 
-    async def test_without_on_error_the_exception_propagates(self):
+    async def test_a_plain_exception_fails_the_run_not_the_task(self):
         wf = with_steps(activity=AsyncMock(side_effect=RuntimeError("boom")))
-        with mock_workflow(), self.assertRaisesRegex(RuntimeError, "boom"):
-            await wf._execute_step({"type": "activity", "activity": "test"}, "test", "test_1", {}, {})
+        with mock_workflow(), self.assertRaisesRegex(ApplicationError, "RuntimeError: boom") as caught:
+            await run_step(wf, {"type": "activity"})
+        self.assertEqual((caught.exception.type, caught.exception.non_retryable), ("ProcessStepError", True))
+
+    async def test_a_temporal_failure_propagates_as_is(self):
+        error = ApplicationError("boom", type="Mine")
+        wf = with_steps(activity=AsyncMock(side_effect=error))
+        with mock_workflow(), self.assertRaises(ApplicationError) as caught:
+            await run_step(wf, {"type": "activity"})
+        self.assertIs(caught.exception, error)
+
+    async def test_a_definition_error_is_never_continued(self):
+        from factory_runtime.process import definition_error
+
+        wf = with_steps(activity=AsyncMock(side_effect=definition_error("bad step")))
+        with mock_workflow(), self.assertRaisesRegex(ApplicationError, "bad step"):
+            await run_step(wf, {"type": "activity", "on_error": "continue"})
 
 
-# I. step ids
+# I. unique ids: one uuid4 per step, drawn only when a step reads it
 
 
-class GenerateStepIdTest(unittest.TestCase):
-    def test_includes_base(self):
-        with mock_workflow() as mock_wf:
-            mock_wf.uuid4.return_value = "abc-123"
-            self.assertEqual(ProcessWorkflowBase()._generate_step_id("my_step"), "my_step_abc-123")
-
-    def test_unique(self):
-        wf = ProcessWorkflowBase()
+class UniqueIdTest(unittest.TestCase):
+    def test_drawn_once_on_first_use(self):
         with mock_workflow() as mock_wf:
             mock_wf.uuid4.side_effect = ["uuid-1", "uuid-2"]
-            self.assertEqual((wf._generate_step_id("step"), wf._generate_step_id("step")), ("step_uuid-1", "step_uuid-2"))
+            context = ctx(base_id="my_step")
+            self.assertEqual(mock_wf.uuid4.call_count, 0)
+            self.assertEqual((context.unique_id, context.unique_id), ("my_step_uuid-1", "my_step_uuid-1"))
+        self.assertEqual(mock_wf.uuid4.call_count, 1)
+
+    def test_iterations_share_the_steps_uuid(self):
+        with mock_workflow() as mock_wf:
+            mock_wf.uuid4.side_effect = ["uuid-1", "uuid-2"]
+            context = ctx(base_id="fan")
+            ids = [context.iteration(i, item).unique_id for i, item in enumerate("ab")]
+        self.assertEqual(ids, ["fan_uuid-1[0]", "fan_uuid-1[1]"])
 
 
 if __name__ == "__main__":

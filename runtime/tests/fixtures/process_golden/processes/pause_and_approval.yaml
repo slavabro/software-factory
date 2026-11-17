@@ -2,9 +2,10 @@ scope: generic  # generic: built-in step types only; decision: uses FamilyOffice
 description: >
   Pause and approval steps: resumed by the resume_step update (answer pinned) and by the signal alias, with and
   without timeout (timer started, then cancelled on resume), expiring ({"action": "expired"}), a signal sent before
-  the step is reached (consumed when it is), `signal_name` ignored, updates rejected by the validator (a step that
-  is not waiting, one that already expired), and the query while paused (current_step always None).
-interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+  the step is reached (consumed when it is), a signal for a step that already expired (dropped), updates rejected
+  by the validator (a step that is not waiting, one that already expired), and the query while paused
+  (current_step is the waiting step).
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
 input: {label: alpha}
 metadata: {source: golden}
 process:
@@ -15,7 +16,6 @@ process:
       args: [before]
     - id: pause_update
       type: pause
-      signal_name: resume_custom_ignored
     - id: approval_timeout_update
       type: approval
       timeout: 3600
@@ -33,7 +33,7 @@ process:
     - id: after
       type: activity
       activity: golden_gate_activity
-      args: [{gate: g_after, note: "{{results.pause_update.note}}"}]
+      args: [{gate: g_after, note: "{{results.pause_update.note}}", late: "{{results.pause_expires}}"}]
 script:
   - probe_waiting: [pause_update]
   - query: while_pause_update_waits
@@ -45,6 +45,7 @@ script:
   - skip_seconds: 300
   - probe_waiting: [pause_signal]
   - update: {step_id: pause_expires, data: {note: too late}}
+  - signal: {step_id: pause_expires, data: {note: too late, by signal}}
   - signal: {step_id: pause_signalled_early, data: {note: sent before the step was reached}}
   - signal: {step_id: pause_signal, data: {note: resumed by signal}}
   - probe_waiting: [approval_signal_timeout]

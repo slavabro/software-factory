@@ -1,7 +1,7 @@
 {
   "case": "fatal_activity.LinearProcessWorkflow",
   "workflow_id": "golden-fatal_activity-linear",
-  "uuid4_draws": 2,
+  "uuid4_draws": 0,
   "commands": [
     {
       "command": "schedule_activity",

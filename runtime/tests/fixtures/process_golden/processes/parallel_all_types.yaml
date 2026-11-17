@@ -1,15 +1,16 @@
 scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
 description: >
-  ParallelProcessWorkflow over every generic step type at once (decisions: parallel_decisions.yaml): all steps start in the first workflow task (one uuid4 each,
-  in order); `condition` is ignored; steps finish in the order the script releases them (gated stubs, resumes) and
-  results and completed_steps keep that order; an unknown type and a for_each over None finish at once.
+  ParallelProcessWorkflow over every generic step type at once (decisions: parallel_decisions.yaml): all steps start
+  in the first workflow task, in order, with no uuid4 draws but the child's default id; a false `condition` skips
+  its step (absent from the results); steps finish in the order the script releases them (gated stubs, resumes) and
+  results and completed_steps keep that order; current_step is the earliest started step still running; a for_each
+  over None finishes at once.
 interpreters: [ParallelProcessWorkflow]
 input: {label: alpha}
 metadata: {source: golden}
 process:
+  interpreter: ParallelProcessWorkflow
   steps:
-    - id: unknown
-      type: mystery_step_type
     - id: none_loop
       type: for_each
       items: "{{input.absent}}"
@@ -18,7 +19,12 @@ process:
       type: activity
       activity: golden_gate_activity
       args: [{gate: g_false_condition}]
-      condition: "1 > 2"
+      condition: "{{input.label}} == 'beta'"
+    - id: true_condition
+      type: activity
+      activity: golden_gate_activity
+      args: [{gate: g_true_condition}]
+      condition: "{{input.label}} == 'alpha'"
     - id: gated_activity
       type: activity
       activity: golden_gate_activity
@@ -46,8 +52,9 @@ script:
   - wait_completed: gated_activity
   - release: g_loop_1
   - update: {step_id: approval, data: {decision: approve}}
-  - release: g_false_condition
-  - wait_completed: false_condition
+  - release: g_true_condition
+  - wait_completed: true_condition
+  - query: after_true_condition
   - release: g_loop_2
   - wait_completed: loop
   - release: g_child

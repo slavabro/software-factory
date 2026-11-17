@@ -1,7 +1,7 @@
 {
   "case": "conditions.ConditionalProcessWorkflow",
   "workflow_id": "golden-conditions-conditional",
-  "uuid4_draws": 10,
+  "uuid4_draws": 0,
   "commands": [
     {
       "command": "schedule_activity",
@@ -198,27 +198,6 @@
       "summary": null
     },
     {
-      "command": "schedule_activity",
-      "activity_type": "golden_value_activity",
-      "activity_id": "10",
-      "task_queue": "process-engine-golden",
-      "input": [
-        "empty_condition"
-      ],
-      "schedule_to_close_timeout": 315360000.0,
-      "schedule_to_start_timeout": 315360000.0,
-      "start_to_close_timeout": 60.0,
-      "heartbeat_timeout": 0.0,
-      "retry_policy": {
-        "initial_interval": 1.0,
-        "backoff_coefficient": 2.0,
-        "maximum_interval": 100.0,
-        "maximum_attempts": 3,
-        "non_retryable_error_types": []
-      },
-      "summary": null
-    },
-    {
       "command": "complete_workflow",
       "result": [
         {
@@ -235,8 +214,7 @@
           "missing_is_none": "missing_is_none",
           "skipped_step_is_none": "skipped_step_is_none",
           "boolean": "boolean",
-          "arithmetic": "arithmetic",
-          "empty_condition": "empty_condition"
+          "arithmetic": "arithmetic"
         }
       ]
     }
@@ -255,8 +233,7 @@
           "missing_is_none",
           "skipped_step_is_none",
           "boolean",
-          "arithmetic",
-          "empty_condition"
+          "arithmetic"
         ],
         "results": {
           "seed": {
@@ -272,8 +249,7 @@
           "missing_is_none": "missing_is_none",
           "skipped_step_is_none": "skipped_step_is_none",
           "boolean": "boolean",
-          "arithmetic": "arithmetic",
-          "empty_condition": "empty_condition"
+          "arithmetic": "arithmetic"
         }
       }
     }

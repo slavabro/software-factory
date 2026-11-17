@@ -2,7 +2,7 @@
  "events": [
   {
    "eventId": "1",
-   "eventTime": "2026-11-13T14:26:19.722Z",
+   "eventTime": "2026-11-17T12:57:45.925Z",
    "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
    "workflowExecutionStartedEventAttributes": {
     "workflowType": {
@@ -17,7 +17,7 @@
        "metadata": {
         "encoding": "anNvbi9wbGFpbg=="
        },
-       "data": "eyJzdGVwcyI6W3siaWQiOiJmaXJzdCIsInR5cGUiOiJhY3Rpdml0eSIsImFjdGl2aXR5IjoiZ29sZGVuX3ZhbHVlX2FjdGl2aXR5IiwiYXJncyI6WyJmaXJzdCJdfSx7ImlkIjoidHdvX2FyZ3MiLCJ0eXBlIjoiYWN0aXZpdHkiLCJhY3Rpdml0eSI6ImdvbGRlbl9lY2hvX2FjdGl2aXR5IiwiYXJncyI6WyJvbmUiLCJ0d28iXX1dfQ=="
+       "data": "eyJzdGVwcyI6W3siaWQiOiJzZWVkIiwidHlwZSI6ImFjdGl2aXR5IiwiYWN0aXZpdHkiOiJnb2xkZW5fdmFsdWVfYWN0aXZpdHkiLCJhcmdzIjpbeyJjb3VudCI6M31dfSx7ImlkIjoiY29tcGFyZXNfYV9kaWN0IiwidHlwZSI6ImFjdGl2aXR5IiwiYWN0aXZpdHkiOiJnb2xkZW5fdmFsdWVfYWN0aXZpdHkiLCJhcmdzIjpbIm5ldmVyIl0sImNvbmRpdGlvbiI6Int7cmVzdWx0cy5zZWVkfX0gPT0gTm9uZSJ9XX0="
       },
       {
        "metadata": {
@@ -36,9 +36,9 @@
     "workflowExecutionTimeout": "315360000s",
     "workflowRunTimeout": "315360000s",
     "workflowTaskTimeout": "10s",
-    "originalExecutionRunId": "9f2a1164-0687-4177-ac1a-7aad08244a68",
+    "originalExecutionRunId": "08db8c77-e58a-400c-84c2-a9ad156f498d",
     "identity": "golden-worker",
-    "firstExecutionRunId": "9f2a1164-0687-4177-ac1a-7aad08244a68",
+    "firstExecutionRunId": "08db8c77-e58a-400c-84c2-a9ad156f498d",
     "attempt": 1,
     "firstWorkflowTaskBackoff": "0s",
     "priority": {}
@@ -46,7 +46,7 @@
   },
   {
    "eventId": "2",
-   "eventTime": "2026-11-13T14:26:19.722Z",
+   "eventTime": "2026-11-17T12:57:45.925Z",
    "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
    "workflowTaskScheduledEventAttributes": {
     "taskQueue": {
@@ -58,38 +58,41 @@
   },
   {
    "eventId": "3",
-   "eventTime": "2026-11-13T14:26:19.722Z",
+   "eventTime": "2026-11-17T12:57:45.926Z",
    "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
    "workflowTaskStartedEventAttributes": {
     "scheduledEventId": "2",
     "identity": "golden-worker",
-    "historySizeBytes": "555"
+    "historySizeBytes": "601"
    }
   },
   {
    "eventId": "4",
-   "eventTime": "2026-11-13T14:26:19.730Z",
+   "eventTime": "2026-11-17T12:57:45.934Z",
    "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
    "workflowTaskCompletedEventAttributes": {
     "scheduledEventId": "2",
     "identity": "golden-worker",
-    "binaryChecksum": "213624f09e72c5fe46587968751ef90a",
+    "binaryChecksum": "abc7498d407b60e7d59df451905d5089",
     "sdkMetadata": {
      "coreUsedFlags": [
-      2,
-      4,
       3,
-      1
+      1,
+      4,
+      2
+     ],
+     "langUsedFlags": [
+      2
      ],
      "sdkName": "temporal-python",
-     "sdkVersion": "1.35.0"
+     "sdkVersion": "1.36.0"
     },
     "meteringMetadata": {}
    }
   },
   {
    "eventId": "5",
-   "eventTime": "2026-11-13T14:26:19.730Z",
+   "eventTime": "2026-11-17T12:57:45.934Z",
    "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
    "activityTaskScheduledEventAttributes": {
     "activityId": "1",
@@ -107,7 +110,7 @@
        "metadata": {
         "encoding": "anNvbi9wbGFpbg=="
        },
-       "data": "ImZpcnN0Ig=="
+       "data": "eyJjb3VudCI6M30="
       }
      ]
     },
@@ -127,7 +130,7 @@
   },
   {
    "eventId": "6",
-   "eventTime": "2026-11-13T14:26:19.730Z",
+   "eventTime": "2026-11-17T12:57:45.934Z",
    "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
    "activityTaskStartedEventAttributes": {
     "scheduledEventId": "5",
@@ -137,7 +140,7 @@
   },
   {
    "eventId": "7",
-   "eventTime": "2026-11-13T14:26:19.731Z",
+   "eventTime": "2026-11-17T12:57:45.935Z",
    "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
    "activityTaskCompletedEventAttributes": {
     "result": {
@@ -146,7 +149,7 @@
        "metadata": {
         "encoding": "anNvbi9wbGFpbg=="
        },
-       "data": "ImZpcnN0Ig=="
+       "data": "eyJjb3VudCI6M30="
       }
      ]
     },
@@ -157,7 +160,7 @@
   },
   {
    "eventId": "8",
-   "eventTime": "2026-11-13T14:26:19.731Z",
+   "eventTime": "2026-11-17T12:57:45.935Z",
    "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
    "workflowTaskScheduledEventAttributes": {
     "taskQueue": {
@@ -169,62 +172,40 @@
   },
   {
    "eventId": "9",
-   "eventTime": "2026-11-13T14:26:19.731Z",
+   "eventTime": "2026-11-17T12:57:45.935Z",
    "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
    "workflowTaskStartedEventAttributes": {
     "scheduledEventId": "8",
     "identity": "golden-worker",
-    "historySizeBytes": "1159"
+    "historySizeBytes": "1216"
    }
   },
   {
    "eventId": "10",
-   "eventTime": "2026-11-13T14:26:19.734Z",
-   "eventType": "EVENT_TYPE_WORKFLOW_TASK_FAILED",
-   "workflowTaskFailedEventAttributes": {
+   "eventTime": "2026-11-17T12:57:45.939Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+   "workflowTaskCompletedEventAttributes": {
     "scheduledEventId": "8",
-    "startedEventId": "9",
-    "cause": "WORKFLOW_TASK_FAILED_CAUSE_WORKFLOW_WORKER_UNHANDLED_FAILURE",
-    "failure": {
-     "message": "execute_activity() takes from 1 to 2 positional arguments but 3 positional arguments (and 2 keyword-only arguments) were given",
-     "stackTrace": "",
-     "applicationFailureInfo": {
-      "type": "TypeError"
-     }
-    },
-    "identity": "golden-worker"
+    "identity": "golden-worker",
+    "binaryChecksum": "abc7498d407b60e7d59df451905d5089",
+    "sdkMetadata": {},
+    "meteringMetadata": {}
    }
   },
   {
    "eventId": "11",
-   "eventTime": "2026-11-13T14:26:19.734Z",
-   "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
-   "workflowTaskScheduledEventAttributes": {
-    "taskQueue": {
-     "name": "process-engine-golden"
+   "eventTime": "2026-11-17T12:57:45.939Z",
+   "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_FAILED",
+   "workflowExecutionFailedEventAttributes": {
+    "failure": {
+     "message": "Step 'compares_a_dict': condition '{{results.seed}} == None': {{results.seed}} is a dict; a condition compares single values (text, numbers, true/false, None), so name a field of it",
+     "stackTrace": "",
+     "applicationFailureInfo": {
+      "type": "ProcessDefinitionError",
+      "nonRetryable": true
+     }
     },
-    "startToCloseTimeout": "10s",
-    "attempt": 2
-   }
-  },
-  {
-   "eventId": "12",
-   "eventTime": "2026-11-13T14:26:19.734Z",
-   "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
-   "workflowTaskStartedEventAttributes": {
-    "scheduledEventId": "11",
-    "identity": "golden-worker",
-    "historySizeBytes": "5460"
-   }
-  },
-  {
-   "eventId": "13",
-   "eventTime": "2026-11-13T14:26:19.776Z",
-   "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_TERMINATED",
-   "workflowExecutionTerminatedEventAttributes": {
-    "reason": "golden run: workflow task failure recorded",
-    "details": {},
-    "identity": "golden-worker"
+    "workflowTaskCompletedEventId": "9"
    }
   }
  ]

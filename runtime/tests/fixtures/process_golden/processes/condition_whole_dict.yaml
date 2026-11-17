@@ -1,0 +1,19 @@
+scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
+description: >
+  A condition that compares a whole result (a dict) fails the run with a ProcessDefinitionError naming the step and
+  the placeholder, instead of quietly skipping the step; the step before it shows as completed.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
+input: {}
+metadata: {}
+outcome: failed
+process:
+  steps:
+    - id: seed
+      type: activity
+      activity: golden_value_activity
+      args: [{count: 3}]
+    - id: compares_a_dict
+      type: activity
+      activity: golden_value_activity
+      args: [never]
+      condition: "{{results.seed}} == None"

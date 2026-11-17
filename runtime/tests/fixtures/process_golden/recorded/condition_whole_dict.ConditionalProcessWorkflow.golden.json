@@ -1,0 +1,55 @@
+{
+  "case": "condition_whole_dict.ConditionalProcessWorkflow",
+  "workflow_id": "golden-condition_whole_dict-conditional",
+  "uuid4_draws": 0,
+  "commands": [
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_value_activity",
+      "activity_id": "1",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "count": 3
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "fail_workflow",
+      "failure": {
+        "message": "Step 'compares_a_dict': condition '{{results.seed}} == None': {{results.seed}} is a dict; a condition compares single values (text, numbers, true/false, None), so name a field of it",
+        "info": "application_failure_info",
+        "type": "ProcessDefinitionError",
+        "non_retryable": true
+      }
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [
+          "seed"
+        ],
+        "results": {
+          "seed": {
+            "count": 3
+          }
+        }
+      }
+    }
+  ]
+}

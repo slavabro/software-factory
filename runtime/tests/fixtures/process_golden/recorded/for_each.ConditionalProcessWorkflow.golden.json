@@ -1,7 +1,7 @@
 {
   "case": "for_each.ConditionalProcessWorkflow",
   "workflow_id": "golden-for_each-conditional",
-  "uuid4_draws": 16,
+  "uuid4_draws": 4,
   "commands": [
     {
       "command": "schedule_activity",
@@ -16,7 +16,8 @@
           },
           "name": "one",
           "missing": null,
-          "input": "lonely"
+          "input": "lonely",
+          "text": "one of size 1"
         }
       ],
       "schedule_to_close_timeout": 315360000.0,
@@ -45,7 +46,8 @@
           },
           "name": "two",
           "missing": null,
-          "input": "lonely"
+          "input": "lonely",
+          "text": "two of size 2"
         }
       ],
       "schedule_to_close_timeout": 315360000.0,
@@ -75,7 +77,8 @@
             },
             "name": "one",
             "missing": null,
-            "input": "lonely"
+            "input": "lonely",
+            "text": "one of size 1"
           }
         ]
       ],
@@ -106,7 +109,8 @@
             },
             "name": "two",
             "missing": null,
-            "input": "lonely"
+            "input": "lonely",
+            "text": "two of size 2"
           }
         ]
       ],
@@ -126,7 +130,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#4>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#1>",
       "task_queue": "process-engine-golden",
       "input": [
         {
@@ -147,7 +151,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#5>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#2>",
       "task_queue": "process-engine-golden",
       "input": [
         {
@@ -168,7 +172,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#7>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#3>",
       "task_queue": "process-engine-golden",
       "input": [
         {
@@ -190,7 +194,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "GoldenChildWorkflow_<uuid4#8>",
+      "workflow_id": "GoldenChildWorkflow_<uuid4#4>",
       "task_queue": "process-engine-golden",
       "input": [
         {
@@ -357,7 +361,8 @@
                   },
                   "name": "one",
                   "missing": null,
-                  "input": "lonely"
+                  "input": "lonely",
+                  "text": "one of size 1"
                 }
               ]
             },
@@ -371,7 +376,8 @@
                   },
                   "name": "two",
                   "missing": null,
-                  "input": "lonely"
+                  "input": "lonely",
+                  "text": "two of size 2"
                 }
               ]
             }
@@ -385,7 +391,8 @@
                 },
                 "name": "one",
                 "missing": null,
-                "input": "lonely"
+                "input": "lonely",
+                "text": "one of size 1"
               }
             ],
             [
@@ -396,16 +403,17 @@
                 },
                 "name": "two",
                 "missing": null,
-                "input": "lonely"
+                "input": "lonely",
+                "text": "two of size 2"
               }
             ]
           ],
           "over_workflow": [
             {
-              "child_workflow_id": "GoldenChildWorkflow_<uuid4#4>"
+              "child_workflow_id": "GoldenChildWorkflow_<uuid4#1>"
             },
             {
-              "child_workflow_id": "GoldenChildWorkflow_<uuid4#5>"
+              "child_workflow_id": "GoldenChildWorkflow_<uuid4#2>"
             }
           ],
           "over_workflow_waiting": [
@@ -433,16 +441,7 @@
             "x",
             "y"
           ],
-          "unsupported_pause": [
-            null,
-            null
-          ],
-          "unsupported_nested": [
-            null,
-            null
-          ],
-          "no_inner_step": [],
-          "inner_on_error": [
+          "failing_items": [
             {
               "ok": {
                 "name": "ok-1"
@@ -473,10 +472,7 @@
           "none_items",
           "empty_items",
           "literal_items",
-          "unsupported_pause",
-          "unsupported_nested",
-          "no_inner_step",
-          "inner_on_error"
+          "failing_items"
         ],
         "results": {
           "over_activity": [
@@ -490,7 +486,8 @@
                   },
                   "name": "one",
                   "missing": null,
-                  "input": "lonely"
+                  "input": "lonely",
+                  "text": "one of size 1"
                 }
               ]
             },
@@ -504,7 +501,8 @@
                   },
                   "name": "two",
                   "missing": null,
-                  "input": "lonely"
+                  "input": "lonely",
+                  "text": "two of size 2"
                 }
               ]
             }
@@ -518,7 +516,8 @@
                 },
                 "name": "one",
                 "missing": null,
-                "input": "lonely"
+                "input": "lonely",
+                "text": "one of size 1"
               }
             ],
             [
@@ -529,16 +528,17 @@
                 },
                 "name": "two",
                 "missing": null,
-                "input": "lonely"
+                "input": "lonely",
+                "text": "two of size 2"
               }
             ]
           ],
           "over_workflow": [
             {
-              "child_workflow_id": "GoldenChildWorkflow_<uuid4#4>"
+              "child_workflow_id": "GoldenChildWorkflow_<uuid4#1>"
             },
             {
-              "child_workflow_id": "GoldenChildWorkflow_<uuid4#5>"
+              "child_workflow_id": "GoldenChildWorkflow_<uuid4#2>"
             }
           ],
           "over_workflow_waiting": [
@@ -566,16 +566,7 @@
             "x",
             "y"
           ],
-          "unsupported_pause": [
-            null,
-            null
-          ],
-          "unsupported_nested": [
-            null,
-            null
-          ],
-          "no_inner_step": [],
-          "inner_on_error": [
+          "failing_items": [
             {
               "ok": {
                 "name": "ok-1"

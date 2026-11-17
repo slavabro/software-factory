@@ -2,9 +2,9 @@ scope: generic  # generic: built-in step types only; decision: uses FamilyOffice
 description: >
   Workflow (child) steps: default id `{name}_{uuid4}` and the parent's task queue, explicit workflow_id and
   task_queue, args as a dict, a list and absent ({}), wait_for_result false ({"child_workflow_id"}), every
-  parent_close_policy value and an invalid one (default kept), execution_timeout, a child outliving its
-  execution_timeout and a failing child under on_error continue.
-interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+  parent_close_policy value, execution_timeout, a child outliving its execution_timeout and a failing child under
+  on_error continue.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
 input: {label: alpha}
 metadata: {source: golden}
 process:
@@ -12,7 +12,7 @@ process:
     - id: child_default
       type: workflow
       workflow_name: GoldenChildWorkflow
-      args: {label: "{{input.label}}", missing: "{{results.nope}}"}
+      args: {label: "{{input.label}}", missing: "{{input.absent}}", text: "for {{input.label}}"}
     - id: child_explicit
       type: workflow
       workflow_name: GoldenChildWorkflow
@@ -40,10 +40,6 @@ process:
       type: workflow
       workflow_name: GoldenChildWorkflow
       parent_close_policy: request_cancel
-    - id: policy_invalid
-      type: workflow
-      workflow_name: GoldenChildWorkflow
-      parent_close_policy: obliterate
     - id: with_execution_timeout
       type: workflow
       workflow_name: GoldenChildWorkflow

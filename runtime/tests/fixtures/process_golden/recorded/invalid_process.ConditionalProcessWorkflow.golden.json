@@ -1,0 +1,26 @@
+{
+  "case": "invalid_process.ConditionalProcessWorkflow",
+  "workflow_id": "golden-invalid_process-conditional",
+  "uuid4_draws": 0,
+  "commands": [
+    {
+      "command": "fail_workflow",
+      "failure": {
+        "message": "Invalid process definition: step 'mystery': unknown type 'mystery_step_type' (known: activity, approval, for_each, pause, workflow); step 'two_args': `args:` has 2 elements; an activity takes one argument: pass a dict (or one value); step 'old_kwargs': `kwargs:` was renamed `options:` (they are execute_activity options, not activity arguments); step 'bad_option': unknown `options:` ['not_an_option'] (known: ['activity_id', 'schedule_to_close_timeout', 'schedule_to_start_timeout', 'summary', 'task_queue']); step 'no_activity': missing `activity:`; step 'old_signal_name': `signal_name:` was removed: a pause step is resumed by `resume_step(step_id, data)` under its own id; step 'bad_policy': unknown `parent_close_policy: obliterate` (known: ['abandon', 'request_cancel', 'terminate']); step 'pause_in_loop': for_each can't run an inner step of type 'pause' (it can run: activity, workflow); step 'inner_on_error': inner step: `on_error:` belongs on the for_each step; step 'bad_syntax': condition '{{results.first}} ~~ 1' can't be evaluated: invalid syntax (<unknown>, line 1); step 'unsafe_call': condition '__import__('os') == None' can't be evaluated: Unsupported AST node type: Call; step 'refs': {{results.never_ran}}: step 'never_ran' is not a step of this process; step 'refs': {{item.name}} is used outside a for_each inner step; step 'refs': {{env.HOME}} is not a placeholder: use {{results.<step>...}}, {{input....}} or, inside for_each, {{item...}}; step 'first': its id is used by an earlier step; step 'first': unknown `on_error: retry` (known: continue)",
+        "info": "application_failure_info",
+        "type": "ProcessDefinitionError",
+        "non_retryable": true
+      }
+    }
+  ],
+  "answers": [
+    {
+      "query": "final",
+      "answer": {
+        "current_step": null,
+        "completed_steps": [],
+        "results": {}
+      }
+    }
+  ]
+}

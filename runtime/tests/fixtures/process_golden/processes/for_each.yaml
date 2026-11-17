@@ -1,10 +1,10 @@
 scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
 description: >
-  for_each over activity (with retry options and {{item}} / {{item.field}} / a missing item field), over a workflow
-  child (fire and forget, abandon; waiting, with execution_timeout), items as a
-  scalar (wrapped), None (skipped, []), an empty list; unsupported inner types (pause, nested for_each -> None per
-  item), no inner step ([]), and an inner on_error (ignored) with the outer on_error continue (failed item -> None).
-interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+  for_each over activity (with retry options and {{item}} / {{item.field}} / a missing item field / an item field
+  inside text), over a workflow child (fire and forget, abandon; waiting, with execution_timeout), items as a scalar
+  (wrapped), None (skipped, []), an empty list, a literal list, and the for_each step's on_error continue (a failed
+  item -> None).
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
 input:
   things: [{name: one, size: 1}, {name: two, size: 2}]
   single: lonely
@@ -20,7 +20,11 @@ process:
         type: activity
         activity: golden_echo_activity
         args:
-          - {whole: "{{item}}", name: "{{item.name}}", missing: "{{item.missing}}", input: "{{input.single}}"}
+          - whole: "{{item}}"
+            name: "{{item.name}}"
+            missing: "{{item.missing}}"
+            input: "{{input.single}}"
+            text: "{{item.name}} of size {{item.size}}"
         timeout: 20
         retry: {max_attempts: 2}
     - id: over_results
@@ -63,21 +67,7 @@ process:
       type: for_each
       items: [x, y]
       step: {type: activity, activity: golden_value_activity, args: ["{{item}}"]}
-    - id: unsupported_pause
-      type: for_each
-      items: "{{input.things}}"
-      step: {type: pause, timeout: 10}
-    - id: unsupported_nested
-      type: for_each
-      items: "{{input.things}}"
-      step:
-        type: for_each
-        items: "{{item.name}}"
-        step: {type: activity, activity: golden_value_activity, args: ["{{item}}"]}
-    - id: no_inner_step
-      type: for_each
-      items: "{{input.things}}"
-    - id: inner_on_error
+    - id: failing_items
       type: for_each
       items: "{{input.failing}}"
       on_error: continue
@@ -86,4 +76,3 @@ process:
         activity: golden_maybe_fail_activity
         args: ["{{item}}"]
         retry: {max_attempts: 1}
-        on_error: continue

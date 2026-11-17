@@ -117,5 +117,6 @@ recordings keep proving the old branch, a new recording proves the new.
 2. FamilyOffice: one worker definition used by the worker and the check; the deployer as in section 2 (build under
    its tag → stop worker → check → retag and up, or restart the old worker), the check in front of every rollback,
    with tests of each path; first run against production as a dry run (report only), then on for real.
-3. Then the engine quirks pinned in R2 (process-engine.md §7) are fixed one by one behind patch markers, each its own
-   small change with golden recordings of both sides.
+3. Then the engine quirks pinned in R2 (process-engine.md §7) are fixed. Done in runtime v0.8 in greenfield mode
+   (section 0): changed directly, golden recordings made again in the same change, the open runs the replay check
+   reported restarted after the deploy.

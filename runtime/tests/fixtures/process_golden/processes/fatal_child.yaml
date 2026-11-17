@@ -1,11 +1,17 @@
 scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
-description: A failing child workflow step without on_error fails the run; the step after it never runs.
-interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, HybridProcessWorkflow]
+description: >
+  A failing child workflow step without on_error fails the run; the step before it shows as completed, the step
+  after it never runs.
+interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
 input: {}
 metadata: {}
 outcome: failed
 process:
   steps:
+    - id: first
+      type: activity
+      activity: golden_value_activity
+      args: [first]
     - id: boom
       type: workflow
       workflow_name: GoldenFailingChildWorkflow

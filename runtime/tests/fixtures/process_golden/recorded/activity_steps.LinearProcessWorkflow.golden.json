@@ -1,7 +1,7 @@
 {
   "case": "activity_steps.LinearProcessWorkflow",
   "workflow_id": "golden-activity_steps-linear",
-  "uuid4_draws": 12,
+  "uuid4_draws": 0,
   "commands": [
     {
       "command": "schedule_activity",
@@ -61,6 +61,7 @@
             "args": []
           },
           "from_input": 42,
+          "spaced": "alpha",
           "input_list": [
             [
               1,
@@ -70,11 +71,11 @@
             "literal"
           ],
           "missing_field": null,
-          "missing_step": null,
           "missing_input": null,
-          "partial_string": "prefix {{input.label}} suffix",
-          "item_outside_loop": null,
-          "item_field_outside_loop": null,
+          "inline_text": "prefix alpha suffix",
+          "inline_number": "value 42 of [1, 2, 3]",
+          "inline_missing": "missing: None",
+          "two_in_one": "alpha-alpha",
           "number": 7,
           "flag": true,
           "nothing": null
@@ -101,8 +102,8 @@
       "input": [
         "alpha"
       ],
-      "schedule_to_close_timeout": 315360000.0,
-      "schedule_to_start_timeout": 315360000.0,
+      "schedule_to_close_timeout": 120.0,
+      "schedule_to_start_timeout": 120.0,
       "start_to_close_timeout": 60.0,
       "heartbeat_timeout": 0.0,
       "retry_policy": {
@@ -112,7 +113,7 @@
         "maximum_attempts": 3,
         "non_retryable_error_types": []
       },
-      "summary": "alpha"
+      "summary": "Echo alpha"
     },
     {
       "command": "schedule_activity",
@@ -120,7 +121,10 @@
       "activity_id": "5",
       "task_queue": "process-engine-golden",
       "input": [
-        "only_key"
+        {
+          "only_key": "kept_value",
+          "label": "alpha"
+        }
       ],
       "schedule_to_close_timeout": 315360000.0,
       "schedule_to_start_timeout": 315360000.0,
@@ -137,8 +141,52 @@
     },
     {
       "command": "schedule_activity",
-      "activity_type": "golden_fail_activity",
+      "activity_type": "golden_echo_activity",
       "activity_id": "6",
+      "task_queue": "process-engine-golden",
+      "input": [
+        {
+          "deep": {
+            "value": 42
+          }
+        }
+      ],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_echo_activity",
+      "activity_id": "7",
+      "task_queue": "process-engine-golden",
+      "input": [],
+      "schedule_to_close_timeout": 315360000.0,
+      "schedule_to_start_timeout": 315360000.0,
+      "start_to_close_timeout": 60.0,
+      "heartbeat_timeout": 0.0,
+      "retry_policy": {
+        "initial_interval": 1.0,
+        "backoff_coefficient": 2.0,
+        "maximum_interval": 100.0,
+        "maximum_attempts": 3,
+        "non_retryable_error_types": []
+      },
+      "summary": null
+    },
+    {
+      "command": "schedule_activity",
+      "activity_type": "golden_fail_activity",
+      "activity_id": "8",
       "task_queue": "process-engine-golden",
       "input": [],
       "schedule_to_close_timeout": 315360000.0,
@@ -157,7 +205,7 @@
     {
       "command": "schedule_activity",
       "activity_type": "golden_fail_activity",
-      "activity_id": "7",
+      "activity_id": "9",
       "task_queue": "process-engine-golden",
       "input": [],
       "schedule_to_close_timeout": 315360000.0,
@@ -178,7 +226,7 @@
     {
       "command": "schedule_activity",
       "activity_type": "golden_value_activity",
-      "activity_id": "8",
+      "activity_id": "10",
       "task_queue": "process-engine-golden",
       "input": [
         null
@@ -222,6 +270,7 @@
                   "args": []
                 },
                 "from_input": 42,
+                "spaced": "alpha",
                 "input_list": [
                   [
                     1,
@@ -231,35 +280,48 @@
                   "literal"
                 ],
                 "missing_field": null,
-                "missing_step": null,
                 "missing_input": null,
-                "partial_string": "prefix {{input.label}} suffix",
-                "item_outside_loop": null,
-                "item_field_outside_loop": null,
+                "inline_text": "prefix alpha suffix",
+                "inline_number": "value 42 of [1, 2, 3]",
+                "inline_missing": "missing: None",
+                "two_in_one": "alpha-alpha",
                 "number": 7,
                 "flag": true,
                 "nothing": null
               }
             ]
           },
-          "kwargs_as_options": {
+          "options_passed": {
             "activity": "golden_echo_activity",
             "args": [
               "alpha"
             ]
           },
-          "args_dict_quirk": {
+          "args_dict_whole": {
             "activity": "golden_echo_activity",
             "args": [
-              "only_key"
+              {
+                "only_key": "kept_value",
+                "label": "alpha"
+              }
             ]
           },
-          "bad_kwarg": null,
-          "two_args": null,
+          "args_single_value": {
+            "activity": "golden_echo_activity",
+            "args": [
+              {
+                "deep": {
+                  "value": 42
+                }
+              }
+            ]
+          },
+          "args_empty": {
+            "activity": "golden_echo_activity",
+            "args": []
+          },
           "retries_exhausted": null,
           "non_retryable": null,
-          "missing_activity_key": null,
-          "mystery": null,
           "after_all": null
         }
       ]
@@ -274,14 +336,12 @@
           "plain",
           "with_options",
           "templates",
-          "kwargs_as_options",
-          "args_dict_quirk",
-          "bad_kwarg",
-          "two_args",
+          "options_passed",
+          "args_dict_whole",
+          "args_single_value",
+          "args_empty",
           "retries_exhausted",
           "non_retryable",
-          "missing_activity_key",
-          "mystery",
           "after_all"
         ],
         "results": {
@@ -307,6 +367,7 @@
                   "args": []
                 },
                 "from_input": 42,
+                "spaced": "alpha",
                 "input_list": [
                   [
                     1,
@@ -316,35 +377,48 @@
                   "literal"
                 ],
                 "missing_field": null,
-                "missing_step": null,
                 "missing_input": null,
-                "partial_string": "prefix {{input.label}} suffix",
-                "item_outside_loop": null,
-                "item_field_outside_loop": null,
+                "inline_text": "prefix alpha suffix",
+                "inline_number": "value 42 of [1, 2, 3]",
+                "inline_missing": "missing: None",
+                "two_in_one": "alpha-alpha",
                 "number": 7,
                 "flag": true,
                 "nothing": null
               }
             ]
           },
-          "kwargs_as_options": {
+          "options_passed": {
             "activity": "golden_echo_activity",
             "args": [
               "alpha"
             ]
           },
-          "args_dict_quirk": {
+          "args_dict_whole": {
             "activity": "golden_echo_activity",
             "args": [
-              "only_key"
+              {
+                "only_key": "kept_value",
+                "label": "alpha"
+              }
             ]
           },
-          "bad_kwarg": null,
-          "two_args": null,
+          "args_single_value": {
+            "activity": "golden_echo_activity",
+            "args": [
+              {
+                "deep": {
+                  "value": 42
+                }
+              }
+            ]
+          },
+          "args_empty": {
+            "activity": "golden_echo_activity",
+            "args": []
+          },
           "retries_exhausted": null,
           "non_retryable": null,
-          "missing_activity_key": null,
-          "mystery": null,
           "after_all": null
         }
       }

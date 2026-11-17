@@ -22,7 +22,7 @@ every open run replays its history against it. So this slice is a **move, not a 
   workflows a step schedules keep their names.
 - **Same command sequence** for every input: the same activities, timers, children and `workflow.uuid4()` calls, in
   the same order, with the same options. The current quirks stay exactly as they are (listed in section 7) and
-  change later, deliberately, under Worker Versioning.
+  change later, deliberately (they were fixed in v0.8, greenfield: section 7).
 - **Same payload shapes:** inputs, results, query and update answers.
 
 **Proof, before FamilyOffice switches** (reviewed 2026-11-13: Temporal's replayer checks the kind, order and type of
@@ -158,20 +158,24 @@ strict import policy see only workflow code.
 - `tests/`: engine-level tests move to the runtime (≈150 functions: templates, conditions, executors, for_each,
   policies, schedules, runs); FamilyOffice keeps its process end-to-end tests, YAML contract tests and decision tests.
 
-## 7. Behaviour kept exactly (to be revisited under Worker Versioning, not here)
+## 7. Behaviour kept exactly (fixed in v0.8)
 
-- Templates resolve only whole strings; conditions substitute each placeholder (string values as repr).
-- Linear and Parallel ignore `condition`; Hybrid runs exactly like Conditional; Parallel steps share one results
-  dict.
-- One `workflow.uuid4()` per executed step (its value unused) and default child ids `{name}_{uuid4}`.
-- `signal_name` on pause steps is ignored; `current_step` in the query is always None; skipped steps are absent from
-  results; schedules start processes with two arguments, on-demand runs with three.
-- An unknown step type logs a warning and stores None; a missing template path gives None.
-- YAML `kwargs:` on an activity step are passed as `execute_activity` options, not activity arguments; more than one
-  `args:` element fails the workflow task (the SDK takes one `arg`).
+**Fixed in v0.8 (2026-11-17), greenfield.** FamilyOffice is greenfield (safe-deploys.md section 0), so the principal
+approved fixing these directly, without Worker Versioning or patch markers, with the golden recordings made again
+from the new engine in the same change and open runs the change breaks restarted after the deploy (the replay
+check, report mode). What the engine does now is in the runtime's README (`factory_runtime.process`: process files,
+validation, failures, progress). What was kept until then, for the record:
 
-Each is listed in the runtime's README as a known quirk, with a test pinning it, so changing one is a visible,
-deliberate decision.
+- Templates resolved only whole strings; conditions substituted each placeholder, and an unevaluable condition (a
+  whole dict, bad syntax) was quietly false.
+- Linear and Parallel ignored `condition`; Hybrid ran exactly like Conditional (now removed); Parallel steps shared
+  one results dict, so a step could read a sibling's result only by luck (now rejected when the file loads).
+- One `workflow.uuid4()` per executed step, its value unused (now drawn only when a step reads its unique id).
+- `signal_name` on pause steps was ignored (now rejected); `current_step` in the query was always None (now the
+  running step); a late `resume_step` signal for an expired pause was kept (now dropped).
+- An unknown step type logged a warning and stored None, a None definition or more than one `args:` element failed
+  the workflow task for ever, a dict `args:` passed its keys, `kwargs:` were execute_activity options (now
+  `options:`): each is now a validation error or a run failing with a clear non-retryable error.
 
 ## 8. Build order
 
@@ -184,6 +188,7 @@ deliberate decision.
 
 ## 9. Later, not in this slice
 
-- Worker Versioning for FamilyOffice's worker, after which the quirks in section 7 can be fixed as normal changes.
+- Worker Versioning (or patch markers, safe-deploys.md) for a product in production mode; the quirks in section 7
+  were fixed in greenfield mode instead.
 - The factory engine using processes for its own multi-step work (F-12).
 - Triggers, decisions, agent jobs: their own slices (sections of foundation.md).
