@@ -26,8 +26,9 @@ logger = logging.getLogger(__name__)
 
 def load_process(process_path: str | Path, settings: ProcessSettings) -> dict[str, Any]:
     """The process definition in `settings.project_root / process_path`, validated (`validate_process`) against the
-    product's `settings.step_types`, parallel when its `interpreter:` is one of `settings.parallel_interpreters`, and
-    with that `interpreter:` one of `settings.interpreters` when the product lists them. Raises FileNotFoundError for
+    product's `settings.step_types`, parallel when the interpreter that runs it (`process_interpreter`: its
+    `interpreter:`, else `settings.default_interpreter`) is one of `settings.parallel_interpreters`, and with that
+    interpreter one of `settings.interpreters` when the product lists them. Raises FileNotFoundError for
     a missing file, ValueError for an empty one, and ProcessValidationError (a ValueError naming the file and each
     step's problem) for one that can't run."""
     path = settings.project_root / process_path
@@ -38,7 +39,8 @@ def load_process(process_path: str | Path, settings: ProcessSettings) -> dict[st
         process_def = yaml.safe_load(content)
         if process_def is None:
             raise ValueError(f"YAML file {path} parsed to None - check file content")
-    interpreter = process_def.get("interpreter") if isinstance(process_def, Mapping) else None
+    default = settings.default_interpreter
+    interpreter = process_interpreter(process_def, default) if isinstance(process_def, Mapping) else None
     parallel = isinstance(interpreter, str) and interpreter in settings.parallel_interpreters
     validate_process(
         process_def,
@@ -46,6 +48,7 @@ def load_process(process_path: str | Path, settings: ProcessSettings) -> dict[st
         parallel=parallel,
         source=str(process_path),
         interpreters=settings.interpreters,
+        default_interpreter=default,
     )
     return process_def  # type: ignore[no-any-return]
 

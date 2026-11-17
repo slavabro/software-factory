@@ -143,28 +143,39 @@ honours it), `on_error: continue` (a failure stores None and the run goes on) an
 Placeholders: `{{results.<step>.<path>}}` (an earlier step), `{{input.<path>}}`, `{{item.<path>}}` (inside a
 `for_each` inner step). A string that is exactly one placeholder gives the value (a dict stays a dict); a
 placeholder inside text is filled in (`"Approve {{input.label}}"`, a non-string as `str(value)`). A missing path is
-None. `\{{` is a literal `{{` (`\{{input.x}}` gives the text `{{input.x}}`; in a double-quoted YAML string write
-`\\{{`); other text in braces that doesn't start `results`, `input` or `item` (`{{name}}`) is left as written, and
-`description:` is never filled in. A condition compares single values (text, numbers, true/false, None): one that
-names a whole dict or list, or that the safe evaluator can't evaluate (bad syntax, an unsupported operator or name),
-fails the run; a comparison or arithmetic its values can't support (`{{results.f.n}} > 0` when `f` was skipped,
-`'5' > 0`, a division by zero) makes the condition false, logged, so the step is skipped. In a parallel process
+None. `\{{` is a literal `{{` (`\{{input.x}}` gives the text `{{input.x}}`), and `\\{{input.x}}` a backslash and
+the value: a run of backslashes right before `{{` stands for half as many, an odd run making that `{{` literal;
+a backslash anywhere else is kept (in a double-quoted YAML string each backslash is doubled). The validator reads
+escapes by the same function (`templates.split_escapes`). Other text in braces that doesn't start `results`, `input`
+or `item`, nor a near miss of one followed by a path (`{{inputs.x}}`, `{{Result.a}}`: refused), is left as written
+(`{{name}}`), and `description:` is never filled in. A condition compares single values (text, numbers,
+true/false, None): one that names a whole dict or list, or that the safe evaluator can't evaluate (bad syntax, an
+unsupported operator or name), fails the run. `and` / `or` short-circuit as in Python, and a comparison its values
+can't support (`{{results.f.n}} > 0` when `f` was skipped, `'5' > 0`, a division by zero inside it, a NaN or
+infinite number) is false on its own, logged, so `{{input.n}} == None or {{input.n}} > 0` is true when `n` is
+missing; arithmetic that fails outside any comparison makes the whole condition false. In a parallel process
 (`run_parallel`) a step can't read another step's result.
 
-Durations (`timeout:`, `heartbeat_timeout_seconds:`, `execution_timeout:`, the `options:` timeouts) are seconds
-above 0: the SDK reads 0 as "no timeout", never what a file means.
+Durations (`timeout:`, `heartbeat_timeout_seconds:`, `execution_timeout:`, the `options:` timeouts,
+`retry.initial_interval_seconds`) are finite seconds above 0 and at most 10 years: the SDK reads 0 as "no timeout",
+never what a file means. `retry.max_attempts` is a whole number of at least 1, `retry.non_retryable_error_types` a
+list of names, and `options.summary`, `activity_id` and `task_queue` are text.
 
-**Validation.** `validate_process(definition, step_types, parallel=None, source="", interpreters=None)` raises
+**Validation.** `validate_process(definition, step_types, parallel=None, source="", interpreters=None,
+default_interpreter=None)` raises
 `ProcessValidationError` listing every problem, each naming its step: not a mapping with a `steps:` list, an
 `interpreter:` not among `interpreters` (when given), a step without a unique `id`, an unknown type, missing or
 unknown keys (on a built-in type, a retired key, `kwargs` or `signal_name`, says what replaced it; a product's own
 type may use those names), an unknown `on_error`, an empty or unevaluable `condition`, a type's own `check`, a
 `for_each` inner step that can't run there, a duration of 0, and a placeholder that names a later step (or, in a
-parallel process, any step) or starts like one but isn't one of the three. A malformed value (a list where a name
+parallel process, any step) or starts like one (or a near miss of one) but isn't one of the three. A file with no
+`interpreter:` is checked as its `default_interpreter` (`load_process` passes the settings' one): parallel when that
+is, and one of `interpreters`. A malformed value (a list where a name
 belongs, keys of mixed types) is a problem, never a crash. `step_types` is required, as in `ProcessSettings`:
 `load_process` runs it with the settings; so does every run before its first step, with its class's `step_types`,
 failing the run with a non-retryable `ProcessDefinitionError` (a None definition too, and a check that crashes,
-e.g. a product's `check` raising). A product's YAML contract test runs it over every process file.
+e.g. a product's `check` raising; a Temporal error it raises, such as the sandbox refusing a call, fails the workflow
+task instead, so the run waits for fixed code). A product's YAML contract test runs it over every process file.
 
 **Failures.** A definition error fails the run at once whatever `on_error` says. Any other exception a step type
 raises that isn't a Temporal failure becomes a non-retryable `ProcessStepError` (so a bug fails the run instead of
@@ -188,6 +199,13 @@ support is false instead of failing the run; a child workflow's one-element `arg
 the list) and `workflow_id:` / `task_queue:` are filled in; durations of 0, two-element child `args:` and literal
 text in braces are validated as above. A run whose definition the new validator refuses fails at once; the replay
 check lists runs that no longer replay.
+
+**Since v0.10** (greenfield too): conditions short-circuit, and a comparison that can't be made (a NaN or infinite
+number included) is false on its own instead of making the whole condition false; mistyped placeholder roots
+(`{{inputs.x}}`, `{{result.a}}`, `{{Input.x}}`) are refused instead of sent as text; `load_process` checks a file
+without `interpreter:` as `settings.default_interpreter`; `\\{{` before a placeholder gives a backslash and the value,
+and the validator reads escapes as the runtime does; durations must be finite and at most 10 years, `retry:` and
+`options:` values are type-checked; a Temporal error in the run-start check fails the workflow task, not the run.
 
 **Golden runs** (`factory_runtime.testing.golden`): one harness for the runtime's recordings and a product's, so
 they normalize the same way. `GoldenHarness(fixture_dir, interpreters, workflows=…, activities=…, workflow_runner=…,

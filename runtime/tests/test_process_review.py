@@ -189,7 +189,7 @@ class LiteralBracesTest(unittest.TestCase):
             problems(
                 [
                     act("a", description="Fills {{results.later}} and {{whatever}}"),
-                    act("b", args={"tpl": "Hello {{name}}", "lit": r"\{{results.later}}", "m": "{{ inputs.x }}"}),
+                    act("b", args={"tpl": "Hello {{name}}", "lit": r"\{{results.later}}", "m": "{{ env.x }}"}),
                 ]
             ),
             [],
@@ -266,11 +266,11 @@ class TimeoutTest(unittest.TestCase):
                 ]
             ),
             [
-                "step 'a': `options.schedule_to_close_timeout` must be seconds (more than 0)",
-                "step 'a': `timeout:` must be seconds (more than 0)",
-                "step 'a': `heartbeat_timeout_seconds:` must be seconds (more than 0)",
-                "step 'w': `execution_timeout:` must be seconds (more than 0)",
-                "step 'p': `timeout:` must be seconds (more than 0)",
+                "step 'a': `options.schedule_to_close_timeout` must be seconds (more than 0, at most 10 years)",
+                "step 'a': `timeout:` must be seconds (more than 0, at most 10 years)",
+                "step 'a': `heartbeat_timeout_seconds:` must be seconds (more than 0, at most 10 years)",
+                "step 'w': `execution_timeout:` must be seconds (more than 0, at most 10 years)",
+                "step 'p': `timeout:` must be seconds (more than 0, at most 10 years)",
             ],
         )
 
