@@ -134,7 +134,7 @@ runtime/factory_runtime/process/
 ├── base.py          ProcessWorkflowBase: handlers, step dispatch, run loops
 ├── steps.py         StepType + activity, workflow, pause/approval, for_each; retry policy builder
 ├── templates.py     whole-string {{results|input|item}} resolution, condition substitution, safe_eval_condition
-├── files.py         load_process(path, root) (PyYAML, a new runtime dependency), process_interpreter, discovery
+├── files.py         load_process(path, settings) (PyYAML, a new runtime dependency), process_interpreter, discovery
 ├── schedules.py     ScheduleDefinition, build_schedule, ScheduleManager (sync, list, runs, pause, resume, trigger)
 ├── runs.py          start_process_run, describe_process_run (generic RunState), signal-with-start stays in temporal/
 └── settings.py      ProcessSettings
@@ -176,6 +176,13 @@ validation, failures, progress). What was kept until then, for the record:
 - An unknown step type logged a warning and stored None, a None definition or more than one `args:` element failed
   the workflow task for ever, a dict `args:` passed its keys, `kwargs:` were execute_activity options (now
   `options:`): each is now a validation error or a run failing with a clear non-retryable error.
+
+**Review fixes in v0.9, greenfield too.** The product's step types are part of `ProcessSettings` (required), so no
+loader falls back to the built-ins; a condition whose values can't be compared (`None > 0` after a skipped step) is
+false instead of failing the run; the validator reports malformed values instead of crashing the run's task; a
+literal `{{` is written `\{{` and text in braces is checked only when it starts like a placeholder; a child's
+`workflow_id` / `task_queue` are filled in and its one-element `args:` list gives its element, as an activity's; a
+duration of 0 is refused; the retired keys belong to the built-in types only. The runtime's README has the details.
 
 ## 8. Build order
 

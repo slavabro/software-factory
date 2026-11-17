@@ -5,15 +5,21 @@ that can't run fails its run at once with every problem named, instead of part-w
 What is checked, each problem naming its step:
 
 - the definition is a mapping with a `steps:` list; each step a mapping with a unique string `id` and a known `type`;
+- `interpreter:`, when the product lists its interpreters (`ProcessSettings.interpreters`), is one of them;
 - the keys of each step: every type's `required` keys are there, and (for a type that lists its `optional` keys)
-  nothing else but `COMMON_STEP_KEYS`; a retired key (`kwargs`, `signal_name`) says what replaced it;
+  nothing else but `COMMON_STEP_KEYS`; on a built-in type, a retired key (`kwargs`, `signal_name`) says what
+  replaced it (a product's own type may use those names);
 - `on_error` is `continue`; `condition` is a non-empty expression the safe evaluator accepts;
 - each type's own `check` (activity: one argument, known options; workflow: a known parent_close_policy; ...);
 - `for_each`: its `step:` is a type that may run inside one, with that type's keys (no `id`, `condition` or
   `on_error` of its own: the `for_each` step's apply);
-- placeholders: `{{results.<step>...}}` names an earlier step (in a parallel process, none: its steps run at once,
-  so a step can't read a sibling's result), `{{item...}}` appears only inside a `for_each` inner step, and anything
-  else in double braces is `{{input....}}`.
+- placeholders (every value but `description:`): `{{results.<step>...}}` names an earlier step (in a parallel
+  process, none: its steps run at once, so a step can't read a sibling's result), `{{item...}}` appears only inside
+  a `for_each` inner step, and a placeholder that starts `results`, `input` or `item` is a whole one. Other text in
+  double braces (`{{name}}`) is literal and left alone, except in a `condition:`, where it can't be evaluated; an
+  escaped `\\{{...}}` is always literal.
+
+The validator never raises on a malformed value (a list where a name belongs, keys of mixed types): it reports it.
 """
 
 from __future__ import annotations
@@ -29,7 +35,12 @@ from factory_runtime.process.steps import (
     RETIRED_KEYS,
     StepType,
 )
-from factory_runtime.process.templates import PLACEHOLDER, condition_syntax_problem, parse_placeholder
+from factory_runtime.process.templates import (
+    PLACEHOLDER,
+    PLACEHOLDER_ROOTS,
+    condition_syntax_problem,
+    parse_placeholder,
+)
 
 # Workflow types that run a process's steps at once (`run_parallel`): `validate_process` reads the file's
 # `interpreter:` against these unless told.
@@ -47,16 +58,21 @@ def _strings(value: Any) -> Iterator[str]:
             yield from _strings(v)
 
 
+def _is_builtin(spec: StepType) -> bool:
+    return any(spec is builtin for builtin in BUILTIN_STEP_TYPES.values())
+
+
 def _key_problems(step: Mapping[str, Any], spec: StepType, common: frozenset[str]) -> list[str]:
     problems = []
-    for key in sorted(set(step) & set(RETIRED_KEYS)):
+    retired = set(RETIRED_KEYS) if _is_builtin(spec) else set()
+    for key in sorted(set(step) & retired):
         problems.append(RETIRED_KEYS[key])
     missing = sorted(spec.required - set(step))
     if missing:
         problems.append(f"missing {', '.join(f'`{k}:`' for k in missing)}")
     if spec.optional is not None:
         allowed = common | spec.required | spec.optional
-        unknown = sorted(set(step) - allowed - set(RETIRED_KEYS))
+        unknown = sorted(set(step) - allowed - retired, key=str)
         if unknown:
             problems.append(f"unknown keys {unknown} (allowed: {sorted(allowed)})")
     if spec.check is not None and not missing:
@@ -64,14 +80,30 @@ def _key_problems(step: Mapping[str, Any], spec: StepType, common: frozenset[str
     return problems
 
 
+def _attempted(expression: str) -> bool:
+    """Does the text in braces start like a placeholder (`results`, `input`, `item`), so it was meant as one?"""
+    return expression.split(".", 1)[0] in PLACEHOLDER_ROOTS
+
+
 def _reference_problems(
-    value: Any, own_id: Any, earlier: list[str], all_ids: set[str], *, parallel: bool, in_loop: bool
+    value: Any,
+    own_id: Any,
+    earlier: list[str],
+    all_ids: set[str],
+    *,
+    parallel: bool,
+    in_loop: bool,
+    strict: bool = False,
 ) -> list[str]:
+    """Problems with the placeholders in `value`. Text in braces that doesn't start like a placeholder is literal,
+    unless `strict` (a condition, which can't evaluate it)."""
     problems: list[str] = []
     for text in _strings(value):
         for match in PLACEHOLDER.finditer(text):
             placeholder = match.group(0)
             parsed = parse_placeholder(match.group(1))
+            if parsed is None and not strict and not _attempted(match.group(1)):
+                continue
             if parsed is None:
                 problems.append(f"{placeholder} is not a placeholder: use {{{{results.<step>...}}}}, "
                                 "{{input....}} or, inside for_each, {{item...}}")
@@ -94,10 +126,26 @@ def _reference_problems(
     return problems
 
 
+def _interpreter_problems(process_def: Mapping[str, Any], interpreters: tuple[str, ...] | None) -> list[str]:
+    if interpreters is None or "interpreter" not in process_def or process_def["interpreter"] is None:
+        return []
+    interpreter = process_def["interpreter"]
+    if not isinstance(interpreter, str):
+        return [f"`interpreter:` must name a workflow type (one of: {', '.join(interpreters)})"]
+    if interpreter not in interpreters:
+        return [f"unknown `interpreter: {interpreter}` (known: {', '.join(interpreters)})"]
+    return []
+
+
 def process_problems(
-    process_def: Any, step_types: Mapping[str, StepType] = BUILTIN_STEP_TYPES, *, parallel: bool = False
+    process_def: Any,
+    step_types: Mapping[str, StepType],
+    *,
+    parallel: bool = False,
+    interpreters: tuple[str, ...] | None = None,
 ) -> list[str]:
-    """Every problem with `process_def` (empty when it can run), each naming its step."""
+    """Every problem with `process_def` (empty when it can run), each naming its step. `step_types`: the product's
+    map; `interpreters`: the workflow types its `interpreter:` may name (None: unchecked)."""
     if process_def is None:
         return ["Process definition is None"]
     if not isinstance(process_def, Mapping):
@@ -106,7 +154,7 @@ def process_problems(
     if not isinstance(steps, list):
         return ["`steps:` must be a list of steps"]
 
-    problems: list[str] = []
+    problems: list[str] = _interpreter_problems(process_def, interpreters)
     all_ids = {s["id"] for s in steps if isinstance(s, Mapping) and isinstance(s.get("id"), str)}
     earlier: list[str] = []
     seen: set[str] = set()
@@ -151,10 +199,16 @@ def process_problems(
         if step_type == "for_each" and "step" in step:
             found.extend(_inner_problems(inner, step_types))
 
-        refs = {k: v for k, v in step.items() if k not in ("id", "type", "step")}
+        refs = {k: v for k, v in step.items() if k not in ("id", "type", "step", "description", "condition")}
         found.extend(_reference_problems(refs, step_id, earlier, all_ids, parallel=parallel, in_loop=False))
+        found.extend(
+            _reference_problems(
+                step.get("condition"), step_id, earlier, all_ids, parallel=parallel, in_loop=False, strict=True
+            )
+        )
         if isinstance(inner, Mapping):
-            found.extend(_reference_problems(inner, step_id, earlier, all_ids, parallel=parallel, in_loop=True))
+            inner_refs = {k: v for k, v in inner.items() if k != "description"}
+            found.extend(_reference_problems(inner_refs, step_id, earlier, all_ids, parallel=parallel, in_loop=True))
 
         problems.extend(f"{label}: {p}" for p in dict.fromkeys(found))
         if isinstance(step_id, str):
@@ -178,16 +232,19 @@ def _inner_problems(inner: Any, step_types: Mapping[str, StepType]) -> list[str]
 
 def validate_process(
     process_def: Any,
-    step_types: Mapping[str, StepType] = BUILTIN_STEP_TYPES,
+    step_types: Mapping[str, StepType],
     *,
     parallel: bool | None = None,
     source: str = "",
+    interpreters: tuple[str, ...] | None = None,
 ) -> None:
     """Raise ProcessValidationError listing every problem with `process_def` (`source`, e.g. its path, leads the
-    message). `parallel`: whether its steps run at once; None reads the definition's `interpreter:` against
-    PARALLEL_INTERPRETERS. A product passes its own `step_types` (its classes' map)."""
+    message). `step_types`: the product's map (its classes' `step_types`). `parallel`: whether its steps run at
+    once; None reads the definition's `interpreter:` against PARALLEL_INTERPRETERS. `interpreters`: the workflow
+    types its `interpreter:` may name (None: unchecked)."""
     if parallel is None:
-        parallel = isinstance(process_def, Mapping) and process_def.get("interpreter") in PARALLEL_INTERPRETERS
-    problems = process_problems(process_def, step_types, parallel=parallel)
+        interpreter = process_def.get("interpreter") if isinstance(process_def, Mapping) else None
+        parallel = isinstance(interpreter, str) and interpreter in PARALLEL_INTERPRETERS
+    problems = process_problems(process_def, step_types, parallel=parallel, interpreters=interpreters)
     if problems:
         raise ProcessValidationError(source, problems)

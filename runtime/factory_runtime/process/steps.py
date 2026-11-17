@@ -41,7 +41,8 @@ COMMON_STEP_KEYS = frozenset({"id", "type", "condition", "on_error", "descriptio
 INNER_STEP_KEYS = frozenset({"type", "description"})
 ON_ERROR_VALUES = ("continue",)
 
-# Keys that were removed or renamed, with what to write instead (the validator's message).
+# Keys of the built-in types that were removed or renamed, with what to write instead (the validator's message;
+# a product's own type may use these names).
 RETIRED_KEYS: Mapping[str, str] = MappingProxyType(
     {
         "kwargs": "`kwargs:` was renamed `options:` (they are execute_activity options, not activity arguments)",
@@ -133,59 +134,66 @@ def build_step_retry_policy(retry: dict[str, Any] | None) -> RetryPolicy:
 
 
 def _is_seconds(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0
+    """A duration in seconds: a number above 0 (0 would mean "no timeout" to the SDK, never what a file means)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+
+
+_SECONDS = "must be seconds (more than 0)"
+
+
+def _one_argument_problems(step: dict[str, Any], what: str) -> list[str]:
+    args = step.get("args")
+    if isinstance(args, list) and len(args) > 1:
+        return [f"`args:` has {len(args)} elements; {what} takes one argument: pass a dict (or one value)"]
+    return []
+
+
+def _one_argument(step: dict[str, Any], ctx: StepContext, absent: list[Any]) -> list[Any]:
+    """The step's one argument, resolved: the element of a one-element list, otherwise the value itself (a dict is
+    passed whole); `absent` when `args:` is absent or []. The same rule for an activity and a child workflow."""
+    args = step.get("args")
+    if args is None or args == []:
+        return absent
+    if isinstance(args, list):
+        if len(args) > 1:
+            raise definition_error(f"Step '{ctx.base_id}': `args:` has {len(args)} elements; a step passes one")
+        return [ctx.resolve(args[0])]
+    return [ctx.resolve(args)]
 
 
 def _check_activity(step: dict[str, Any]) -> list[str]:
     problems = []
     if not isinstance(step.get("activity"), str) or not step["activity"]:
         problems.append("`activity:` must name the activity")
-    args = step.get("args")
-    if isinstance(args, list) and len(args) > 1:
-        problems.append(
-            f"`args:` has {len(args)} elements; an activity takes one argument: pass a dict (or one value)"
-        )
+    problems.extend(_one_argument_problems(step, "an activity"))
     options = step.get("options")
     if options is not None:
         if not isinstance(options, dict):
             problems.append("`options:` must be a mapping of execute_activity options")
         else:
-            unknown = sorted(set(options) - ACTIVITY_OPTIONS)
+            unknown = sorted(set(options) - ACTIVITY_OPTIONS, key=str)
             if unknown:
                 problems.append(f"unknown `options:` {unknown} (known: {sorted(ACTIVITY_OPTIONS)})")
             for key in sorted(set(options) & _SECONDS_OPTIONS):
                 if not _is_seconds(options[key]):
-                    problems.append(f"`options.{key}` must be seconds")
+                    problems.append(f"`options.{key}` {_SECONDS}")
     for key in ("timeout", "heartbeat_timeout_seconds"):
         if key in step and not _is_seconds(step[key]):
-            problems.append(f"`{key}:` must be seconds")
+            problems.append(f"`{key}:` {_SECONDS}")
     retry = step.get("retry")
     if retry is not None:
         if not isinstance(retry, dict):
             problems.append("`retry:` must be a mapping")
         else:
-            unknown = sorted(set(retry) - RETRY_KEYS)
+            unknown = sorted(set(retry) - RETRY_KEYS, key=str)
             if unknown:
                 problems.append(f"unknown `retry:` keys {unknown} (known: {sorted(RETRY_KEYS)})")
     return problems
 
 
-def _activity_args(step: dict[str, Any], ctx: StepContext) -> list[Any]:
-    """The activity's arguments: none when `args:` is absent or [], the element of a one-element list, otherwise
-    the value itself (a dict is passed whole)."""
-    args = step.get("args")
-    if args is None or args == []:
-        return []
-    if isinstance(args, list):
-        if len(args) > 1:
-            raise definition_error(f"Step '{ctx.base_id}': `args:` has {len(args)} elements; an activity takes one")
-        return [ctx.resolve(args[0])]
-    return [ctx.resolve(args)]
-
-
 def _activity_options(step: dict[str, Any], ctx: StepContext) -> dict[str, Any]:
     options = step.get("options") or {}
-    unknown = sorted(set(options) - ACTIVITY_OPTIONS)
+    unknown = sorted(set(options) - ACTIVITY_OPTIONS, key=str)
     if unknown:
         raise definition_error(f"Step '{ctx.base_id}': unknown `options:` {unknown}")
     resolved: dict[str, Any] = {}
@@ -196,16 +204,16 @@ def _activity_options(step: dict[str, Any], ctx: StepContext) -> dict[str, Any]:
 
 
 async def activity_step(wf: ProcessWorkflowBase, step: dict[str, Any], ctx: StepContext) -> Any:
-    """Run the activity named `activity:` with `args:` resolved as its one argument (a one-element list, or a dict
-    or other value passed whole), a bounded retry policy (`retry:`), `timeout:` (start_to_close seconds, default
-    60), `heartbeat_timeout_seconds:`, and `options:` (execute_activity options: summary, activity_id, task_queue,
-    schedule_to_close_timeout and schedule_to_start_timeout in seconds)."""
+    """Run the activity named `activity:` with `args:` resolved as its one argument (a one-element list gives its
+    element; a dict or other value is passed whole; absent or [] passes none), a bounded retry policy (`retry:`),
+    `timeout:` (start_to_close seconds, default 60), `heartbeat_timeout_seconds:`, and `options:` (execute_activity
+    options: summary, activity_id, task_queue, schedule_to_close_timeout and schedule_to_start_timeout in seconds)."""
     activity_name = step.get("activity")
     if not activity_name:
         raise definition_error(f"Activity step '{ctx.base_id}' missing 'activity' key")
 
     timeout_seconds = step.get("timeout", DEFAULT_ACTIVITY_TIMEOUT_SECONDS)
-    args = _activity_args(step, ctx)
+    args = _one_argument(step, ctx, absent=[])
 
     # Explicit, bounded retries on every step (never the SDK's unlimited default), optional heartbeat deadline.
     activity_options: dict[str, Any] = {
@@ -232,18 +240,24 @@ def _check_workflow(step: dict[str, Any]) -> list[str]:
     problems = []
     if not isinstance(step.get("workflow_name"), str) or not step["workflow_name"]:
         problems.append("`workflow_name:` must name the child workflow")
+    problems.extend(_one_argument_problems(step, "a child workflow"))
     policy = step.get("parent_close_policy")
-    if policy is not None and policy not in _PARENT_CLOSE_POLICIES:
+    if policy is not None and (not isinstance(policy, str) or policy not in _PARENT_CLOSE_POLICIES):
         problems.append(f"unknown `parent_close_policy: {policy}` (known: {sorted(_PARENT_CLOSE_POLICIES)})")
+    for key in ("workflow_id", "task_queue"):
+        if key in step and (not isinstance(step[key], str) or not step[key]):
+            problems.append(f"`{key}:` must be text")
     if "execution_timeout" in step and not _is_seconds(step["execution_timeout"]):
-        problems.append("`execution_timeout:` must be seconds")
+        problems.append(f"`execution_timeout:` {_SECONDS}")
     return problems
 
 
 async def workflow_step(wf: ProcessWorkflowBase, step: dict[str, Any], ctx: StepContext) -> Any:
-    """Run the child workflow `workflow_name:` with `args:` resolved as its one argument.
+    """Run the child workflow `workflow_name:` with `args:` resolved as its one argument, by the activity's rule (a
+    one-element list gives its element; a dict or other value is passed whole), `{}` when absent or [].
 
-    Options: `workflow_id` (default `{workflow_name}_{uuid4}`), `task_queue` (default the parent's),
+    Options: `workflow_id` (placeholders resolved; default `{workflow_name}_{uuid4}`, also when it resolves to
+    nothing), `task_queue` (placeholders resolved; default the parent's),
     `wait_for_result` (default true; false starts it and gives `{"child_workflow_id": ...}`), `parent_close_policy`
     (`abandon`, `terminate`, `request_cancel`), `execution_timeout` (seconds)."""
     workflow_name = step.get("workflow_name")
@@ -252,9 +266,9 @@ async def workflow_step(wf: ProcessWorkflowBase, step: dict[str, Any], ctx: Step
     if policy_str is not None and parent_close_policy is None:
         raise definition_error(f"Step '{ctx.base_id}': unknown parent_close_policy '{policy_str}'")
 
-    workflow_args = ctx.resolve(step.get("args", {}))
-    child_id = step.get("workflow_id") or f"{workflow_name}_{workflow.uuid4()}"
-    task_queue = step.get("task_queue", workflow.info().task_queue)
+    (workflow_args,) = _one_argument(step, ctx, absent=[{}])
+    child_id = _text(ctx.resolve(step.get("workflow_id"))) or f"{workflow_name}_{workflow.uuid4()}"
+    task_queue = _text(ctx.resolve(step.get("task_queue"))) or workflow.info().task_queue
     wait_for_result = step.get("wait_for_result", True)
 
     workflow.logger.info(f"Starting child workflow '{workflow_name}' as step '{ctx.base_id}'")
@@ -274,9 +288,14 @@ async def workflow_step(wf: ProcessWorkflowBase, step: dict[str, Any], ctx: Step
     return {"child_workflow_id": child_handle.id}
 
 
+def _text(value: Any) -> str:
+    """A resolved id or queue as text ("" for None: the default applies)."""
+    return "" if value is None else str(value)
+
+
 def _check_pause(step: dict[str, Any]) -> list[str]:
     if "timeout" in step and not _is_seconds(step["timeout"]):
-        return ["`timeout:` must be seconds"]
+        return [f"`timeout:` {_SECONDS}"]
     return []
 
 

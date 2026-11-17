@@ -31,6 +31,7 @@ from factory_runtime.process import (
     validate_process,
 )
 from factory_runtime.process.files import load_process
+from factory_runtime.process.settings import ProcessSettings
 from factory_runtime.testing import make_worker, query_eventually, time_skipping_env
 from tests.process_workflows import (
     PROCESS_WORKFLOWS,
@@ -313,7 +314,7 @@ class OnceTest(unittest.IsolatedAsyncioTestCase):
 
 class ValidationTest(unittest.TestCase):
     def problems(self, steps: list[dict[str, Any]], **kwargs: Any) -> list[str]:
-        return process_problems({"steps": steps}, **kwargs)
+        return process_problems({"steps": steps}, BUILTIN_STEP_TYPES, **kwargs)
 
     def test_a_valid_process_has_no_problems(self) -> None:
         steps = [
@@ -365,16 +366,17 @@ class ValidationTest(unittest.TestCase):
             ],
         )
         with self.assertRaises(ProcessValidationError):  # read from the file's interpreter
-            validate_process({"interpreter": "ParallelProcessWorkflow", "steps": steps})
+            validate_process({"interpreter": "ParallelProcessWorkflow", "steps": steps}, BUILTIN_STEP_TYPES)
 
     def test_load_process_validates_and_names_the_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "good.yaml").write_text("steps:\n  - {id: a, type: activity, activity: x}\n")
             (root / "bad.yaml").write_text("steps:\n  - {id: a, type: teleport}\n")
-            self.assertEqual(load_process("good.yaml", root)["steps"][0]["id"], "a")
+            settings = ProcessSettings(project_root=root, step_types=BUILTIN_STEP_TYPES)
+            self.assertEqual(load_process("good.yaml", settings)["steps"][0]["id"], "a")
             with self.assertRaisesRegex(ProcessValidationError, r"^bad\.yaml: .*step 'a': unknown type 'teleport'"):
-                load_process("bad.yaml", root)
+                load_process("bad.yaml", settings)
 
 
 @activity.defn(name="a_activity")
@@ -473,6 +475,7 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         state = await handle.query("get_step_results")
         self.assertEqual(state["completed_steps"], ["p", "q"])
         self.assertIsNone(state["current_step"])
+        self.assertEqual(await handle.query("pending_resumes"), [])  # before v0.8 the late data stayed as "p"
 
 
 if __name__ == "__main__":

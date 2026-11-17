@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest import mock
 
 import yaml
@@ -22,6 +23,7 @@ from temporalio.client import (
 )
 from temporalio.service import RPCError, RPCStatusCode
 
+from factory_runtime.process import BUILTIN_STEP_TYPES
 from factory_runtime.process.files import parse_process_schedules
 from factory_runtime.process.schedules import (
     ProcessScheduleConfig,
@@ -33,8 +35,14 @@ from factory_runtime.process.schedules import (
 from factory_runtime.process.settings import ProcessSettings
 from factory_runtime.temporal import TemporalSettings, data_converter
 
+
+def settings_for(**kwargs: Any) -> ProcessSettings:
+    """ProcessSettings with the built-in step types (these tests use no others)."""
+    return ProcessSettings(step_types=BUILTIN_STEP_TYPES, **kwargs)
+
+
 PROCESS_PATH = "processes/test_process.yaml"
-SETTINGS = ProcessSettings(project_root=Path("/nonexistent"))
+SETTINGS = settings_for(project_root=Path("/nonexistent"))
 TEMPORAL = TemporalSettings(task_queue="test-queue")
 
 
@@ -235,7 +243,7 @@ class BuildScheduleTest(FakeProcess):
             (root / PROCESS_PATH).write_text("name: From Disk\nsteps: []\n")
             schedule_def = sd(id="s", cron="0 18 * * 1-5")
             schedule, _ = build_schedule(
-                _process_config(schedule_def), schedule_def, ProcessSettings(project_root=root), TEMPORAL
+                _process_config(schedule_def), schedule_def, settings_for(project_root=root), TEMPORAL
             )
         self.assertEqual(schedule.action.args[0], {"name": "From Disk", "steps": []})
 
@@ -260,19 +268,19 @@ class BuildScheduleTest(FakeProcess):
 
     def test_default_overlap_comes_from_settings(self):
         schedule_def = sd(id="s", cron="0 * * * *")
-        settings = ProcessSettings(project_root=Path("/nonexistent"), default_overlap_policy="allow_all")
+        settings = settings_for(project_root=Path("/nonexistent"), default_overlap_policy="allow_all")
         schedule, _ = self.build(_process_config(schedule_def), schedule_def, settings)
         self.assertEqual(schedule.policy.overlap, ScheduleOverlapPolicy.ALLOW_ALL)
 
     def test_unknown_default_overlap_is_rejected(self):
         schedule_def = sd(id="s", cron="0 * * * *")
-        settings = ProcessSettings(project_root=Path("/nonexistent"), default_overlap_policy="bogus")
+        settings = settings_for(project_root=Path("/nonexistent"), default_overlap_policy="bogus")
         with self.assertRaisesRegex(ValueError, "bogus"):
             self.build(_process_config(schedule_def), schedule_def, settings)
 
     def test_jitter_and_catchup_come_from_settings(self):
         schedule_def = sd(id="s", cron="0 * * * *")
-        settings = ProcessSettings(
+        settings = settings_for(
             project_root=Path("/nonexistent"), cron_jitter=timedelta(minutes=2), catchup_window=timedelta(minutes=7)
         )
         schedule, _ = self.build(_process_config(schedule_def), schedule_def, settings)
@@ -552,7 +560,7 @@ class SyncConvergenceTest(FakeProcess, unittest.IsolatedAsyncioTestCase):
             (root / "processes" / "p.yaml").write_text(
                 "name: P\nsteps: []\nschedules:\n  - id: from-disk\n    cron: '0 9 * * *'\n"
             )
-            manager = ScheduleManager(self.client, ProcessSettings(project_root=root), TEMPORAL)
+            manager = ScheduleManager(self.client, settings_for(project_root=root), TEMPORAL)
             result = await manager.sync_all_from_files()
         self.assertEqual(result.created, ["from-disk"])
 
@@ -728,7 +736,7 @@ class ScheduleRunsTest(unittest.IsolatedAsyncioTestCase):
         client = _RunsClient([(f"w{i}", WorkflowExecutionStatus.COMPLETED, None) for i in range(5)])
         runs = await ScheduleManager(client, SETTINGS, TEMPORAL).get_schedule_runs("s", limit=2)
         self.assertEqual([r.workflow_id for r in runs], ["w4", "w3"])
-        settings = ProcessSettings(project_root=Path("/nonexistent"), runs_limit=3)
+        settings = settings_for(project_root=Path("/nonexistent"), runs_limit=3)
         runs = await ScheduleManager(client, settings, TEMPORAL).get_schedule_runs("s")
         self.assertEqual(len(runs), 3)
 

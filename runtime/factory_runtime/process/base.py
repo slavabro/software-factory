@@ -15,8 +15,10 @@ Run loops: `run_linear` (steps in order; `run_conditional` is the same loop unde
 absent from the results. Each returns the results by step id once every in-flight handler has finished.
 
 A run first checks its definition (validation.py, with this class's step types): one that can't run, a None
-definition included, fails the run at once with a non-retryable `ProcessDefinitionError` naming every problem. So
-does a condition that can't be evaluated, and a step that finds its definition wrong while running; `on_error:
+definition included, fails the run at once with a non-retryable `ProcessDefinitionError` naming every problem (also
+when the check itself crashes, e.g. on a product step type's `check`). So does a condition that can't be evaluated
+(bad syntax, a dict or list compared; a comparison its values can't support is false instead), and a step that
+finds its definition wrong while running; `on_error:
 continue` does not apply to these. Any other error a step type raises that isn't a Temporal failure becomes a
 non-retryable `ApplicationError` (type `ProcessStepError`), so a bug in a step fails the run instead of retrying its
 workflow task forever; `on_error: continue` does apply to it.
@@ -107,7 +109,12 @@ class ProcessWorkflowBase:
         self._metadata = metadata or {}
         workflow.logger.info(f"Starting {workflow.info().workflow_type} with metadata: {self._metadata}")
 
-        problems = process_problems(process_def, self.step_types, parallel=parallel)
+        try:
+            problems = process_problems(process_def, self.step_types, parallel=parallel)
+        except Exception as e:  # a malformed value the checks didn't foresee: fail the run, not the task (for ever)
+            raise definition_error(
+                f"Invalid process definition: checking it failed: {type(e).__name__}: {e}"
+            ) from None
         if problems:
             raise definition_error("Invalid process definition: " + "; ".join(problems))
         assert process_def is not None  # checked above

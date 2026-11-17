@@ -11,8 +11,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 import yaml
 
 from factory_runtime.process.settings import ProcessSettings
-from factory_runtime.process.steps import BUILTIN_STEP_TYPES, StepType
-from factory_runtime.process.validation import PARALLEL_INTERPRETERS, validate_process
+from factory_runtime.process.validation import validate_process
 
 if TYPE_CHECKING:
     from factory_runtime.process.schedules import (
@@ -25,18 +24,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def load_process(
-    process_path: str | Path,
-    root: Path,
-    step_types: Mapping[str, StepType] = BUILTIN_STEP_TYPES,
-    *,
-    parallel_interpreters: tuple[str, ...] = PARALLEL_INTERPRETERS,
-) -> dict[str, Any]:
-    """The process definition in `root / process_path`, validated (`validate_process` with `step_types`, the
-    product's map; parallel when its `interpreter:` is one of `parallel_interpreters`). Raises FileNotFoundError for
+def load_process(process_path: str | Path, settings: ProcessSettings) -> dict[str, Any]:
+    """The process definition in `settings.project_root / process_path`, validated (`validate_process`) against the
+    product's `settings.step_types`, parallel when its `interpreter:` is one of `settings.parallel_interpreters`, and
+    with that `interpreter:` one of `settings.interpreters` when the product lists them. Raises FileNotFoundError for
     a missing file, ValueError for an empty one, and ProcessValidationError (a ValueError naming the file and each
     step's problem) for one that can't run."""
-    path = root / process_path
+    path = settings.project_root / process_path
     with open(path, "r") as f:
         content = f.read()
         if not content.strip():
@@ -44,8 +38,15 @@ def load_process(
         process_def = yaml.safe_load(content)
         if process_def is None:
             raise ValueError(f"YAML file {path} parsed to None - check file content")
-    parallel = isinstance(process_def, Mapping) and process_def.get("interpreter") in parallel_interpreters
-    validate_process(process_def, step_types, parallel=parallel, source=str(process_path))
+    interpreter = process_def.get("interpreter") if isinstance(process_def, Mapping) else None
+    parallel = isinstance(interpreter, str) and interpreter in settings.parallel_interpreters
+    validate_process(
+        process_def,
+        settings.step_types,
+        parallel=parallel,
+        source=str(process_path),
+        interpreters=settings.interpreters,
+    )
     return process_def  # type: ignore[no-any-return]
 
 

@@ -1,7 +1,8 @@
 scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
 description: >
   Conditions, honoured by every interpreter: literals, templates from results and input (string values as repr), a
-  missing path and a skipped step resolving to None, booleans, not, arithmetic. A false condition skips its step
+  missing path and a skipped step resolving to None, an ordering comparison against such a None (false, so skipped,
+  not a failed run), booleans, not, arithmetic. A false condition skips its step
   (absent from the results). Started with two arguments, as a schedule starts a process.
 interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
 input: {threshold: 5, name: "it's"}
@@ -51,6 +52,11 @@ process:
       activity: golden_value_activity
       args: [null_value]
       condition: "{{results.seed.nothing}} != None"
+    - id: ordering_on_skipped
+      type: activity
+      activity: golden_value_activity
+      args: [ordering_on_skipped]
+      condition: "{{results.literal_false.count}} > 0"
     - id: boolean
       type: activity
       activity: golden_value_activity

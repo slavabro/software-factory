@@ -6,10 +6,14 @@
   text is filled in: `"Approve {{input.label}}"` gives `"Approve alpha"`, a non-string value as `str(value)`.
   Dicts and lists are resolved element by element. A missing path gives None (logged unless `log_missing=False`;
   `strict=True` raises instead), so inside text it reads `None`. Anything else in braces stays as written (the
-  validator rejects it when the file loads).
+  validator rejects it when the file loads if it starts like a placeholder: `results`, `input`, `item`).
+- `\\{{` is a literal `{{`: `\\{{input.x}}` gives the text `{{input.x}}` (write it in a plain or single-quoted
+  YAML string; in a double-quoted one the backslash is doubled).
 - A condition fills in each placeholder (a string as its repr, None as `None`) and evaluates the result with
-  `safe_eval_condition`: comparisons, `and`/`or`/`not`, arithmetic and literals, nothing else. A placeholder whose
-  value is not a single value (a dict, a list) or an expression that can't be evaluated raises `ConditionError`.
+  the safe evaluator: comparisons, `and`/`or`/`not`, arithmetic and literals, nothing else. A placeholder whose
+  value is not a single value (a dict, a list) or an expression that can't be evaluated (bad syntax, an unsupported
+  operator or name) raises `ConditionError`. A comparison or arithmetic that can't be made with the values it got
+  (`None > 0` when a step was skipped, `'5' > 0`, a division by zero) makes the whole condition false, logged.
 """
 
 from __future__ import annotations
@@ -21,8 +25,9 @@ from typing import Any, Callable
 
 from temporalio import workflow
 
-# One placeholder: {{ root.path }} (no braces inside)
-PLACEHOLDER = re.compile(r"\{\{\s*([^{}]*?)\s*\}\}")
+# One placeholder: {{ root.path }} (no braces inside, not escaped as \{{)
+PLACEHOLDER = re.compile(r"(?<!\\)\{\{\s*([^{}]*?)\s*\}\}")
+ESCAPED_BRACES = "\\{{"
 PLACEHOLDER_ROOTS = ("results", "input", "item")
 
 # Safe operators for condition evaluation (no code execution)
@@ -246,7 +251,8 @@ def resolve_argument(
                 return match.group(0)
             return value if isinstance(value, str) else str(value)
 
-        return PLACEHOLDER.sub(fill, arg)
+        # Split on the escapes first, so a filled-in value that happens to contain `\{{` is left as it is.
+        return "{{".join(PLACEHOLDER.sub(fill, part) for part in arg.split(ESCAPED_BRACES))
     elif isinstance(arg, dict):
         return {
             k: resolve_argument(v, workflow_results, input_data, strict, loop_item, log_missing) for k, v in arg.items()
@@ -261,7 +267,9 @@ def evaluate_condition(condition: str, workflow_results: dict[str, Any], input_d
 
     A missing path is None, silently: "step skipped" or "key absent" compares with `== None` / `!= None`. Raises
     ConditionError for a placeholder that isn't a single value (str, number, bool, None) and for an expression
-    that can't be evaluated."""
+    that can't be evaluated (bad syntax, an unsupported operator or name). A comparison or arithmetic the values
+    can't support (`None > 0`, `'5' > 0`, `1 / 0`) makes the whole condition false, with a warning: a value that
+    is missing or of the wrong kind skips the step instead of failing the run."""
 
     def fill(match: re.Match[str]) -> str:
         text = match.group(0)
@@ -280,6 +288,14 @@ def evaluate_condition(condition: str, workflow_results: dict[str, Any], input_d
 
     resolved = PLACEHOLDER.sub(fill, condition)
     try:
-        return safe_eval_condition(resolved)
-    except ValueError as e:
+        tree = ast.parse(resolved, mode="eval")
+        _check_nodes(tree)
+    except (SyntaxError, ValueError) as e:
         raise ConditionError(f"condition '{condition}' can't be evaluated: {e}") from None
+    try:
+        return bool(_safe_eval(tree))
+    except (TypeError, ArithmeticError) as e:
+        workflow.logger.warning(
+            f"Condition '{condition}' is false: {resolved} can't be evaluated ({type(e).__name__}: {e})"
+        )
+        return False

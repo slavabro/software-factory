@@ -100,10 +100,10 @@ start them. Design: `docs/designs/process-engine.md`.
 | `BUILTIN_STEP_TYPES`, `StepType`, `StepContext` | step types: `activity`, `workflow`, `pause`/`approval`, `for_each`; add your own as `{**BUILTIN_STEP_TYPES, "x": StepType(fn, for_each=True, required=…, optional=…)}` in the class's `step_types` |
 | `validate_process`, `process_problems`, `ProcessValidationError` | check a definition: every problem, each naming its step (below) |
 | `resolve_argument`, `evaluate_condition`, `safe_eval_condition` | `{{results.…}}`, `{{input.…}}`, `{{item.…}}` placeholders and `condition:` expressions |
-| `files`: `load_process`, `process_interpreter`, `discover_processes`, `discover_schedules` | process files under `ProcessSettings.project_root`, by its globs; `load_process(path, root, step_types)` validates |
+| `files`: `load_process`, `process_interpreter`, `discover_processes`, `discover_schedules` | process files under `ProcessSettings.project_root`, by its globs; `load_process(path, settings)` validates against `settings.step_types` (and `settings.interpreters`) |
 | `schedules`: `ScheduleDefinition`, `build_schedule`, `ScheduleManager` | Temporal Schedules from the files: a sync that converges (and deletes `retired_schedules:`), list, runs, pause, resume, trigger |
 | `runs`: `start_process_run`, `describe_process_run` | start a process under a workflow id or join its run; how it stands (`RunState`) |
-| `settings.ProcessSettings` | root, globs, default interpreter and time zone, cron jitter, overlap, catchup window, runs listed |
+| `settings.ProcessSettings` | root, the product's `step_types` (required: the map its classes run, so a file never loads against the built-ins alone), the `interpreters` a file may name (None: unchecked), the parallel ones, globs, default interpreter and time zone, cron jitter, overlap, catchup window, runs listed |
 
 A step type is `async def step(wf, step, ctx) -> result`: `wf` is the running workflow (`wf.step_state` is a dict
 for per-run state; `await wf.once(key, fetch)` runs `fetch()` at most once per run, steps asking at the same time
@@ -124,13 +124,16 @@ on-demand run.
 **Process files.** A step is `{id, type, ...}` plus `condition:` (skip the step when false; every interpreter
 honours it), `on_error: continue` (a failure stores None and the run goes on) and `description:`. Built-in types:
 
-- `activity`: `activity:` (required), `args:` (its one argument: a one-element list, or a dict or other value passed
-  whole; more than one element is an error), `timeout:` (start_to_close seconds, default 60),
+- `activity`: `activity:` (required), `args:` (its one argument: a one-element list gives its element, a dict or
+  other value is passed whole, absent or `[]` passes none; more than one element is an error), `timeout:`
+  (start_to_close seconds, default 60),
   `heartbeat_timeout_seconds:`, `retry: {max_attempts, initial_interval_seconds, non_retryable_error_types}`
   (default 3 attempts), `options:` (execute_activity options: `summary`, `activity_id`, `task_queue`,
   `schedule_to_close_timeout` and `schedule_to_start_timeout` in seconds; `kwargs:` is the old name and is rejected);
-- `workflow`: `workflow_name:` (required), `args:` (its one argument), `workflow_id:` (default
-  `{workflow_name}_{uuid4}`), `task_queue:`, `wait_for_result:` (default true; false gives `{"child_workflow_id"}`),
+- `workflow`: `workflow_name:` (required), `args:` (its one argument, by the activity's rule; absent or `[]` passes
+  `{}`), `workflow_id:` (placeholders filled in; default `{workflow_name}_{uuid4}`, also when it resolves to
+  nothing), `task_queue:` (placeholders filled in; default the parent's), `wait_for_result:` (default true; false
+  gives `{"child_workflow_id"}`),
   `parent_close_policy:` (`abandon`, `terminate`, `request_cancel`), `execution_timeout:` (seconds);
 - `pause` / `approval`: `timeout:` (seconds; then `{"action": "expired", "timeout_seconds"}`); resumed by
   `resume_step(step_id, data)` under its id (`signal_name:` is gone and rejected);
@@ -140,17 +143,28 @@ honours it), `on_error: continue` (a failure stores None and the run goes on) an
 Placeholders: `{{results.<step>.<path>}}` (an earlier step), `{{input.<path>}}`, `{{item.<path>}}` (inside a
 `for_each` inner step). A string that is exactly one placeholder gives the value (a dict stays a dict); a
 placeholder inside text is filled in (`"Approve {{input.label}}"`, a non-string as `str(value)`). A missing path is
-None. A condition compares single values (text, numbers, true/false, None): one that names a whole dict or list, or
-that the safe evaluator can't evaluate, fails the run. In a parallel process (`run_parallel`) a step can't read
-another step's result.
+None. `\{{` is a literal `{{` (`\{{input.x}}` gives the text `{{input.x}}`; in a double-quoted YAML string write
+`\\{{`); other text in braces that doesn't start `results`, `input` or `item` (`{{name}}`) is left as written, and
+`description:` is never filled in. A condition compares single values (text, numbers, true/false, None): one that
+names a whole dict or list, or that the safe evaluator can't evaluate (bad syntax, an unsupported operator or name),
+fails the run; a comparison or arithmetic its values can't support (`{{results.f.n}} > 0` when `f` was skipped,
+`'5' > 0`, a division by zero) makes the condition false, logged, so the step is skipped. In a parallel process
+(`run_parallel`) a step can't read another step's result.
 
-**Validation.** `validate_process(definition, step_types, parallel=None, source="")` raises `ProcessValidationError`
-listing every problem, each naming its step: not a mapping with a `steps:` list, a step without a unique `id`, an
-unknown type, missing or unknown keys (a retired key says what replaced it), an unknown `on_error`, an empty or
-unevaluable `condition`, a type's own `check`, a `for_each` inner step that can't run there, and a placeholder that
-names a later step (or, in a parallel process, any step) or isn't one of the three. `load_process` runs it (pass the
-product's `step_types`); so does every run before its first step, failing the run with a non-retryable
-`ProcessDefinitionError` (a None definition too). A product's YAML contract test runs it over every process file.
+Durations (`timeout:`, `heartbeat_timeout_seconds:`, `execution_timeout:`, the `options:` timeouts) are seconds
+above 0: the SDK reads 0 as "no timeout", never what a file means.
+
+**Validation.** `validate_process(definition, step_types, parallel=None, source="", interpreters=None)` raises
+`ProcessValidationError` listing every problem, each naming its step: not a mapping with a `steps:` list, an
+`interpreter:` not among `interpreters` (when given), a step without a unique `id`, an unknown type, missing or
+unknown keys (on a built-in type, a retired key, `kwargs` or `signal_name`, says what replaced it; a product's own
+type may use those names), an unknown `on_error`, an empty or unevaluable `condition`, a type's own `check`, a
+`for_each` inner step that can't run there, a duration of 0, and a placeholder that names a later step (or, in a
+parallel process, any step) or starts like one but isn't one of the three. A malformed value (a list where a name
+belongs, keys of mixed types) is a problem, never a crash. `step_types` is required, as in `ProcessSettings`:
+`load_process` runs it with the settings; so does every run before its first step, with its class's `step_types`,
+failing the run with a non-retryable `ProcessDefinitionError` (a None definition too, and a check that crashes,
+e.g. a product's `check` raising). A product's YAML contract test runs it over every process file.
 
 **Failures.** A definition error fails the run at once whatever `on_error` says. Any other exception a step type
 raises that isn't a Temporal failure becomes a non-retryable `ProcessStepError` (so a bug fails the run instead of
@@ -167,6 +181,13 @@ waiting now.
 would replay are fixed (docs/designs/process-engine.md section 7), so a run started before v0.8 may not replay; run
 the replay check in report mode before deploying and restart what it lists. Other notes: schedules start a process
 with two arguments, on-demand runs with three.
+
+**Since v0.9** (greenfield too): `ProcessSettings.step_types` is required and `load_process(path, settings)` takes the
+settings (`validate_process` / `process_problems` take `step_types` with no default); a condition its values can't
+support is false instead of failing the run; a child workflow's one-element `args:` list gives its element (it gave
+the list) and `workflow_id:` / `task_queue:` are filled in; durations of 0, two-element child `args:` and literal
+text in braces are validated as above. A run whose definition the new validator refuses fails at once; the replay
+check lists runs that no longer replay.
 
 **Golden runs** (`factory_runtime.testing.golden`): one harness for the runtime's recordings and a product's, so
 they normalize the same way. `GoldenHarness(fixture_dir, interpreters, workflows=…, activities=…, workflow_runner=…,
