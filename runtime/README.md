@@ -29,6 +29,51 @@ The package never reads a product's config: everything comes in as arguments. `T
 server and Temporal Cloud (`tls`, `api_key`); anything else `Client.connect` takes goes through `get_client`.
 `cached_client` / `set_client` read or put the process's client without connecting (health checks, tests).
 
+## Safe deploys: the worker definition, the replay check, the patch report
+
+Design: `docs/designs/safe-deploys.md`. A product keeps one worker on the newest code and checks every open run
+before each deploy and rollback.
+
+**One definition** (`factory_runtime.temporal.WorkerDefinition`), exposed once at module level; the worker and the
+check both build from it, so they can't disagree about what is registered:
+
+```python
+DEFINITION = WorkerDefinition(
+    task_queues=(settings.task_queue,),
+    workflows=(OrderWorkflow, ...),
+    activity_names=activity_names(ACTIVITIES),   # names only: the check never builds activities
+    workflow_runner=build_workflow_runner(passthrough=...),
+    data_converter=data_converter(settings.compress_min_bytes, settings.warn_bytes),
+    interceptors=(...), workflow_failure_exception_types=(...),
+    settings=settings,                           # where the check connects by default
+)
+worker = DEFINITION.worker(client, activities=build_activities(...))  # raises if the activities differ
+```
+
+`external_activity_names` names activity types the workflows call that other workers serve. `replayer()` gives the
+matching `Replayer`.
+
+**`python -m factory_runtime.temporal.replay_check MODULE:ATTR [--server HOST:PORT] [--namespace NS] [--tls]
+[--json]`** (ATTR: the definition or a function returning it; flags override `definition.settings`; an API key comes
+from the settings or `$TEMPORAL_API_KEY`). It lists every open run in the namespace with no type filter and, for the
+definition's queues, fails a run whose type isn't registered, replays each history through the definition's
+`Replayer` (nondeterminism reported apart from other replay failures), and checks what runs call next: each pending
+activity's type, each received signal's and update's handler, and each schedule's workflow type on those queues.
+Runs on other queues are counted for information; one of a type the definition registers fails. The report gives
+counts per type and each failure's kind, workflow id, type, run id and error message, never payloads. Exit **0**
+pass, **1** runs would break (or the definition didn't load): reject the release, **2** couldn't check (Temporal or
+visibility unreachable): retry. In code: `await check_open_runs(client, definition)` returns the `ReplayReport`.
+
+Replay proves only that recorded commands come out the same: not options, payloads, nor code past the end of a
+history (golden tests cover those), and not the queries a client sends (they leave no history; pin handler names in
+a product test).
+
+**`python -m factory_runtime.temporal.patches MODULE:ATTR [same options]`** (`await patch_report(client,
+definition)`): replays open runs with `workflow.patched` instrumented and reports per patch id the runs on its old
+side (it returned False while replaying), the runs carrying a non-deprecated marker, and the rest, with the step the
+lifecycle allows: keep `patched(id)` → `deprecate_patch(id)` once no run is on the old side → remove the call once
+no run carries a non-deprecated marker. Exit 1 when runs had to be left out (replay failed, type unregistered).
+
 ## `factory_runtime.process`
 
 Processes written as a list of YAML steps, run by Temporal workflows, and the schedules and on-demand runs that
@@ -61,7 +106,7 @@ queue), the process loader, the memo its pages read (`schedule_memo`, the memo o
 schedules start paused (`initially_paused`), its `ScheduleDefinition` subclass, and the metadata argument of an
 on-demand run.
 
-**Known quirks**, kept because running workflows replay against this code; change one only under Worker Versioning
+**Known quirks**, kept because running workflows replay against this code; change one only behind a patch marker (safe deploys, above)
 (`tests/test_process_quirks.py` pins most by name; the golden runs in `tests/test_process_golden.py` pin every
 step-level one command by command):
 
