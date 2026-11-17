@@ -10,6 +10,21 @@ Why: a workflow re-reads its history whenever a worker picks it up. New code tha
 breaks that run. Products have runs that stay open for weeks or over a year (FamilyOffice decisions: 30 days to
 decide, up to 365 to execute), so every deploy must keep every open run replaying.
 
+## 0. Two modes: greenfield now, production later
+
+Decided 2026-11-17 by the principal: **FamilyOffice is greenfield** (a dev mindset: its data can be restarted).
+
+| | Greenfield (FamilyOffice today) | Production (when a product holds data that can't be restarted) |
+|---|---|---|
+| Replay check before deploys and rollbacks | runs in **report** mode: says which open runs a release would break, never blocks | runs in **enforce** mode: a release that would break an open run is rejected |
+| Changing workflow behaviour | change the code directly, no patch markers | behind patch markers (section 3) |
+| Open runs a change breaks | restarted the way the app starts them (terminate, start again), after reading the report | never broken: the change waits behind its patch |
+| Dead schedules, workflows | removed outright | retired, once no run depends on them |
+
+A product moves to production mode by setting `DEPLOY_REPLAY_CHECK=enforce` and adopting section 3; the tooling for
+both modes exists, so the switch is configuration, not new work. Golden tests apply in both modes: in greenfield a
+deliberate behaviour change re-records its goldens in the same change.
+
 ## 1. The replay check (generic, in the runtime)
 
 `factory_runtime.temporal.replay_check` — given a client, the product's workflow classes, its data converter and
