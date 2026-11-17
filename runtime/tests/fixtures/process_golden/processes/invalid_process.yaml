@@ -2,7 +2,8 @@ scope: generic  # generic: built-in step types only; decision: uses FamilyOffice
 description: >
   A definition with every kind of mistake fails the run before any step runs, with one non-retryable
   ProcessDefinitionError naming each problem and its step (the same checks validate_process runs when a file
-  loads). Under Parallel, reading another step's result is one more problem.
+  loads). Under Parallel, reading another step's result is one more problem. Text in braces that doesn't start like
+  a placeholder is literal and not a problem; a malformed value (a list as a policy) is a problem, not a crash.
 interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow, ParallelProcessWorkflow]
 input: {}
 metadata: {}
@@ -37,6 +38,15 @@ process:
       type: workflow
       workflow_name: GoldenChildWorkflow
       parent_close_policy: obliterate
+    - id: listed_policy
+      type: workflow
+      workflow_name: GoldenChildWorkflow
+      parent_close_policy: [abandon]
+      args: [one, two]
+    - id: zero_timeout
+      type: activity
+      activity: golden_value_activity
+      timeout: 0
     - id: pause_in_loop
       type: for_each
       items: [1]
@@ -60,7 +70,8 @@ process:
         - later: "{{results.never_ran}}"
           earlier: "{{results.first}}"
           item: "{{item.name}}"
-          unknown: "{{env.HOME}}"
+          unknown: "{{results}}"
+          literal: "{{env.HOME}}"
     - id: first
       type: activity
       activity: golden_value_activity

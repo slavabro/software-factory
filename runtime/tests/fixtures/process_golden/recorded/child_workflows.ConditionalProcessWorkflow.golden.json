@@ -29,7 +29,7 @@
     {
       "command": "start_child_workflow",
       "workflow_type": "GoldenChildWorkflow",
-      "workflow_id": "golden-child-explicit",
+      "workflow_id": "golden-child-alpha",
       "task_queue": "process-engine-golden-alt",
       "input": [
         {
@@ -57,10 +57,7 @@
       "workflow_id": "GoldenChildWorkflow_<uuid4#2>",
       "task_queue": "process-engine-golden",
       "input": [
-        [
-          "one",
-          "alpha"
-        ]
+        "alpha"
       ],
       "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
       "workflow_execution_timeout": 0.0,
@@ -253,10 +250,7 @@
           },
           "child_list_args": {
             "child": "GoldenChildWorkflow",
-            "received": [
-              "one",
-              "alpha"
-            ]
+            "received": "alpha"
           },
           "child_no_args": {
             "child": "GoldenChildWorkflow",
@@ -323,10 +317,7 @@
           },
           "child_list_args": {
             "child": "GoldenChildWorkflow",
-            "received": [
-              "one",
-              "alpha"
-            ]
+            "received": "alpha"
           },
           "child_no_args": {
             "child": "GoldenChildWorkflow",

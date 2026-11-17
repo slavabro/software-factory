@@ -107,7 +107,7 @@ class SyncResult(BaseModel):
 
 # === What a product passes in ===
 
-# The process definition at a path (default: files.load_process from the project root).
+# The process definition at a path (default: files.load_process with the settings: their root and step types).
 ProcessLoader = Callable[[str], dict[str, Any]]
 # (config, process definition or None for a Python workflow) -> does a NEW schedule start paused?
 InitiallyPaused = Callable[[ScheduleConfig, Optional[dict[str, Any]]], bool]
@@ -147,7 +147,7 @@ def build_schedule(
     compiled calendars and does not return cron strings)."""
     process_def: Optional[dict[str, Any]] = None
     if isinstance(config, ProcessScheduleConfig):
-        loader = load_process or (lambda path: files.load_process(path, settings.project_root))
+        loader = load_process or (lambda path: files.load_process(path, settings))
         process_def = loader(config.process_path)
         workflow_ref = config.interpreter
         workflow_args: list[Any] = [process_def, schedule_def.input_data or {}]

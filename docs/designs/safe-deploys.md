@@ -104,6 +104,10 @@ commands; a patch that changes only a value kept in workflow state (measured: de
 side replays) passes replay either way, and only the report catches it. Golden tests record both sides: the old
 recordings keep proving the old branch, a new recording proves the new.
 
+A validator that gets stricter is a behaviour change too: every run checks its definition before its first step, so
+an open run whose (already accepted) definition the new rule refuses fails on replay. In production mode a tightened
+check goes behind a patch like any other change (the old rule for runs already started).
+
 ## 4. CI side
 
 - Golden runs (synthetic, in each repo) prove options and payloads per step type, both sides of every live patch.

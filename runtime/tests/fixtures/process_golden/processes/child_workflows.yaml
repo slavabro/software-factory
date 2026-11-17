@@ -1,7 +1,7 @@
 scope: generic  # generic: built-in step types only; decision: uses FamilyOffice's decision step
 description: >
-  Workflow (child) steps: default id `{name}_{uuid4}` and the parent's task queue, explicit workflow_id and
-  task_queue, args as a dict, a list and absent ({}), wait_for_result false ({"child_workflow_id"}), every
+  Workflow (child) steps: default id `{name}_{uuid4}` and the parent's task queue, explicit workflow_id (with a
+  placeholder) and task_queue, args as a dict, a one-element list (its element, as for an activity) and absent ({}), wait_for_result false ({"child_workflow_id"}), every
   parent_close_policy value, execution_timeout, a child outliving its execution_timeout and a failing child under
   on_error continue.
 interpreters: [LinearProcessWorkflow, ConditionalProcessWorkflow]
@@ -16,13 +16,13 @@ process:
     - id: child_explicit
       type: workflow
       workflow_name: GoldenChildWorkflow
-      workflow_id: golden-child-explicit
+      workflow_id: "golden-child-{{input.label}}"
       task_queue: process-engine-golden-alt
       args: {from_previous: "{{results.child_default.received}}"}
     - id: child_list_args
       type: workflow
       workflow_name: GoldenChildWorkflow
-      args: [one, "{{input.label}}"]
+      args: ["{{input.label}}"]
     - id: child_no_args
       type: workflow
       workflow_name: GoldenChildWorkflow

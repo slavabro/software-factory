@@ -67,6 +67,11 @@ class LinearProcessWorkflow(ProcessWorkflowBase):
     ) -> Dict[str, Any]:
         return await self.run_linear(process_def, input_data, metadata)
 
+    @workflow.query
+    def pending_resumes(self) -> list[str]:
+        """Steps holding resume data not yet consumed (tests read what a late signal left behind)."""
+        return sorted(self._pause_results)
+
 
 @workflow.defn(name="ConditionalProcessWorkflow")
 class ConditionalProcessWorkflow(ProcessWorkflowBase):

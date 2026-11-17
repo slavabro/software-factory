@@ -9,6 +9,7 @@ import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
 from temporalio.client import WorkflowExecutionStatus
@@ -16,6 +17,7 @@ from temporalio.common import WorkflowIDConflictPolicy, WorkflowIDReusePolicy
 from temporalio.exceptions import WorkflowAlreadyStartedError
 from temporalio.service import RPCError, RPCStatusCode
 
+from factory_runtime.process import BUILTIN_STEP_TYPES
 from factory_runtime.process.files import (
     discover_processes,
     discover_schedules,
@@ -28,6 +30,12 @@ from factory_runtime.process.schedules import ProcessScheduleConfig, ScheduleDef
 from factory_runtime.process.settings import ProcessSettings
 from factory_runtime.temporal import TemporalSettings
 
+
+def settings_for(**kwargs: Any) -> ProcessSettings:
+    """ProcessSettings with the built-in step types (these tests use no others)."""
+    return ProcessSettings(step_types=BUILTIN_STEP_TYPES, **kwargs)
+
+
 DEFAULT = "LinearProcessWorkflow"
 TEMPORAL = TemporalSettings(task_queue="test-queue")
 
@@ -37,7 +45,7 @@ class TempRoot(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         self.root = Path(tmp.name)
-        self.settings = ProcessSettings(project_root=self.root, default_timezone="Europe/London")
+        self.settings = settings_for(project_root=self.root, default_timezone="Europe/London")
 
     def write(self, rel: str, text: str) -> Path:
         path = self.root / rel
@@ -75,7 +83,7 @@ class ProcessInterpreterTest(TempRoot):
 
     def test_schedule_discovery_falls_back_to_the_default_interpreter(self):
         path = self.write("p.yaml", "name: P\nsteps: []\nschedules:\n  - id: p-daily\n    cron: '0 9 * * *'\n")
-        settings = ProcessSettings(project_root=self.root, default_interpreter="HybridProcessWorkflow")
+        settings = settings_for(project_root=self.root, default_interpreter="HybridProcessWorkflow")
         self.assertEqual(parse_process_schedules(path, settings, ScheduleDefinition).interpreter, "HybridProcessWorkflow")
 
 
@@ -88,24 +96,24 @@ class LoadProcessTest(TempRoot):
     def test_loads_relative_to_the_root(self):
         self.write("processes/p.yaml", "name: P\nsteps:\n  - id: a\n    type: activity\n    activity: x\n")
         self.assertEqual(
-            load_process("processes/p.yaml", self.root),
+            load_process("processes/p.yaml", self.settings),
             {"name": "P", "steps": [{"id": "a", "type": "activity", "activity": "x"}]},
         )
-        self.assertEqual(load_process(Path("processes/p.yaml"), self.root)["name"], "P")
+        self.assertEqual(load_process(Path("processes/p.yaml"), self.settings)["name"], "P")
 
     def test_missing_file_raises(self):
         with self.assertRaises(FileNotFoundError):
-            load_process("processes/missing.yaml", self.root)
+            load_process("processes/missing.yaml", self.settings)
 
     def test_empty_file_raises(self):
         self.write("processes/empty.yaml", "  \n\n")
         with self.assertRaisesRegex(ValueError, "empty or contains only whitespace"):
-            load_process("processes/empty.yaml", self.root)
+            load_process("processes/empty.yaml", self.settings)
 
     def test_file_that_parses_to_nothing_raises(self):
         self.write("processes/null.yaml", "# only a comment\n")
         with self.assertRaisesRegex(ValueError, "parsed to None"):
-            load_process("processes/null.yaml", self.root)
+            load_process("processes/null.yaml", self.settings)
 
 
 # -----------------------------------------------------------------------------
@@ -133,7 +141,7 @@ class DiscoverProcessesTest(TempRoot):
 
     def test_glob_comes_from_settings(self):
         self.write("org/a/processes/p.yaml", "name: P\n")
-        settings = ProcessSettings(project_root=self.root, process_glob="org/*/processes/*.yaml")
+        settings = settings_for(project_root=self.root, process_glob="org/*/processes/*.yaml")
         self.assertEqual([p.path for p in discover_processes(settings)], ["org/a/processes/p.yaml"])
 
 
@@ -208,7 +216,7 @@ CLOSED = datetime(2026, 10, 27, 14, 1, tzinfo=UTC)
 INPUT = {"asset_id": "a1", "start_date": "2026-10-01", "end_date": "2026-10-02"}
 PROCESS_DEF = {"name": "Refetch", "interpreter": "ConditionalProcessWorkflow", "metadata": {"department": "data"}}
 METADATA = {"department": "data", "process_name": "Refetch"}
-SETTINGS = ProcessSettings(project_root=Path("/nonexistent"))
+SETTINGS = settings_for(project_root=Path("/nonexistent"))
 
 
 def _client(start_error=None, describe=None, result=None) -> MagicMock:
