@@ -98,6 +98,58 @@ the fix, when:
   does not), so a PR that only edits a spec would skip that workflow. `docs/**` is the usual trap; hence `specs/`
   at the root.
 
+## Costs and budgets: `[cost]`, `[departments.*]`, `[[budgets]]`
+
+Agent spend comes from Claude Code's session transcripts on the machine (every repo, interactive sessions,
+subagents, factory runs), priced at API list rates (`factory cost`, spec:
+[tasks/F-33-costs-budgets.md](tasks/F-33-costs-budgets.md)). The same three sections live in two places:
+
+| File | Applies to |
+|------|------------|
+| `~/.config/software-factory/factory.toml` (`FACTORY_USER_CONFIG`; only these sections) | all spend: the place for departments that span repos and for overall budgets |
+| a repo's `.factory.toml` | that repo's spend: its departments are tried before the user file's, its budgets count only its own turns, its `[cost]` keys win for its turns |
+
+```toml
+[cost]
+task_pattern = '...'          # regex: the task ID in a branch, else in the worktree's name (group 1, or the match).
+                              # Default: "PROJ-12" / "f-33" (letters-dash-digits) or "1.60a" (dotted)
+plan_monthly_usd = 200        # a subscription's flat fee: shown beside the spend, never added to it (user file)
+stale_hours = 6               # the SessionStart check refreshes the usage cache in the background when older (user file)
+web_search_usd = 0.01         # per server-side web search
+
+[cost.prices."claude-opus-5-5"]   # USD per million tokens; a key left out keeps the default (sfactory/usage.py)
+input = 4.0                   # also output, cache_write_5m, cache_write_1h, cache_read; a new model needs all five
+fast_multiplier = 2.0         # applied when a turn ran in fast mode; US-only inference adds 10 %
+                              # a model with no price counts $0 and is named as unpriced
+
+[departments.upkeep]          # a group you name; the first department whose every given rule matches wins
+capabilities = ["*"]          # factory runs: `factory run` capabilities and engine teams
+[departments.factory-dev]
+repos = ["software-factory"]  # rules, each a list of globs: repos, capabilities, branches, cwds (~ allowed), agents
+                              # no match: "unassigned"
+
+[[budgets]]                   # one entry per budget
+department = "upkeep"         # scope, at most one: department, agent, task or repo; none = all spend
+monthly_usd = 100             # limits, at least one: daily_usd, monthly_usd, daily_tokens, monthly_tokens
+daily_usd = 20                # (calendar day and month, local time; tokens = input + output + cache writes + reads)
+warn = 75                     # % of the limit: "Approaching" (default 75)
+danger = 90                   # "Near limit" (default 90); from 100 %: "Over limit"
+hard = true                   # default; over the limit, factory runs it covers do not start. false = alert only
+
+[[budgets]]
+task = "*"                    # a glob scope is one budget per match: each task capped at $250 a month
+monthly_usd = 250
+hard = false
+```
+
+**Agents** are `interactive` (a session you drive), `subagent:<type>` (Explore, general-purpose, …) and
+`run:<capability>` (a factory run or engine team, its subagents included). **Tasks** without an ID are `no task`.
+
+**Enforcement.** `factory run <capability>` and the engine's `check_budget` refuse to start a run that a hard
+budget over its limit covers (all spend, the run's department, its agent `run:<capability>`, or its repo), and say
+which budget and where it is set. The factory plugin's SessionStart hook (`factory cost hook`) prints one line per
+budget at its danger line or over, and nothing otherwise; it reads the state the last scan saved, never scans.
+
 ## Safety model for unattended runs
 
 1. **Isolation** — every run is a fresh worktree off `origin/<default_branch>` with its own environments; the main
@@ -108,7 +160,8 @@ the fix, when:
 4. **Guard hook** — the factory plugin's PreToolUse hook blocks the same actions on the full command text during a
    run (`FACTORY_RUN` set), whatever the permission mode. Merging stays the repo's gate's job.
 5. **The repo's own gate** — every PR goes through `[land]` (CI, review gate, the tower or the principal).
-6. **Limits** — one run per repo and capability (a stale lock from a dead run is taken over), a timeout, `max_prs`.
+6. **Limits** — one run per repo and capability (a stale lock from a dead run is taken over), a timeout, `max_prs`,
+   and the hard `[[budgets]]` that cover the run.
 
 ## Commands
 
@@ -120,6 +173,10 @@ the fix, when:
 | `factory task …` | the task system ([tasks.md](tasks.md)): `init`, `new`, `start`, `subtask`, `complete`, `close`, `set`, `show`, `check`, `check-pr`, `render`, `exists`; with `system = "commands"` only `new` / `exists`, running the repo's commands with every value shell-quoted |
 | `factory spec check` | every capability spec in `[specs] dir` is well formed, history-free and proven by tests that exist; exit 1 with each problem and its fix |
 | `factory run upgrade [--dry-run] [--keep]` | the whole upgrade unattended: fresh worktree off `origin/<default_branch>`, `[worktree] setup`, then the agent runs `/factory:upgrade`; one run per repo at a time; log under `~/.cache/software-factory/logs/<repo>/` |
+| `factory cost [--since 7d\|30d\|month\|today\|DATE] [--by department\|agent\|task\|repo\|session\|model] [--json]` | agent spend across every repo on the machine, ranked, with share; USD at API list rates |
+| `factory cost budgets [--json]` | every budget's state today and this month (word and shape: ✓ Within budget, ! Approaching, ! Near limit, ✕ Over limit); exit 1 while any is over |
+| `factory cost page [--since …] [--out PATH] [--open]` | the costs page, one self-contained HTML file (default `~/.cache/software-factory/usage/costs.html`) |
+| `factory cost check --capability C` | exit 1 with the reason when a hard budget stops this repo's C runs |
 | `factory engine install --repo PATH` | the engine runs this repo's teams: each team's `schedule` becomes a Temporal Schedule (in the engine's time zone, `engine.toml` `time_zone`, default the machine's), paused until its first run by hand |
 | `factory engine run-now --repo PATH --team T` · `status` · `pause` · `resume` · `signal` | run a team now, see schedules and recent runs, pause or resume a team, wake teams on an event ([engine/README.md](../engine/README.md)) |
 

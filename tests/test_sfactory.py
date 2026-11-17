@@ -12,7 +12,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins" / "factory"))
 
-from sfactory import config, deprecations, guard, manifests, runner, upgrade, versions  # noqa: E402
+from sfactory import config, costconfig, deprecations, guard, manifests, runner, upgrade, versions  # noqa: E402
+
+# `factory run` checks budgets first: never against the developer's own budget file.
+costconfig.USER_CONFIG = Path(tempfile.gettempdir()) / "sfactory-tests-no-user-config" / "factory.toml"
 
 
 def write(root: Path, rel: str, text: str) -> None:

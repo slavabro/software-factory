@@ -10,8 +10,8 @@ PLUGIN = Path(__file__).resolve().parents[2] / "plugins" / "factory"
 if str(PLUGIN) not in sys.path:
     sys.path.insert(0, str(PLUGIN))
 
-from sfactory import config, runner  # noqa: E402
+from sfactory import config, cost, runner  # noqa: E402
 from sfactory import engine as install  # noqa: E402
 from sfactory import status  # noqa: E402
 
-__all__ = ["config", "install", "runner", "status"]
+__all__ = ["config", "cost", "install", "runner", "status"]
