@@ -2,7 +2,7 @@
  "events": [
   {
    "eventId": "1",
-   "eventTime": "2026-11-17T14:10:21.775Z",
+   "eventTime": "2026-11-17T14:39:41.433Z",
    "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
    "workflowExecutionStartedEventAttributes": {
     "workflowType": {
@@ -36,9 +36,9 @@
     "workflowExecutionTimeout": "315360000s",
     "workflowRunTimeout": "315360000s",
     "workflowTaskTimeout": "10s",
-    "originalExecutionRunId": "ce0af03c-daba-42b7-850f-a4710449d93f",
+    "originalExecutionRunId": "f067c573-3363-4bad-8f18-7689a8ba378e",
     "identity": "golden-worker",
-    "firstExecutionRunId": "ce0af03c-daba-42b7-850f-a4710449d93f",
+    "firstExecutionRunId": "f067c573-3363-4bad-8f18-7689a8ba378e",
     "attempt": 1,
     "firstWorkflowTaskBackoff": "0s",
     "priority": {}
@@ -46,7 +46,7 @@
   },
   {
    "eventId": "2",
-   "eventTime": "2026-11-17T14:10:21.775Z",
+   "eventTime": "2026-11-17T14:39:41.433Z",
    "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
    "workflowTaskScheduledEventAttributes": {
     "taskQueue": {
@@ -58,22 +58,22 @@
   },
   {
    "eventId": "3",
-   "eventTime": "2026-11-17T14:10:21.775Z",
+   "eventTime": "2026-11-17T14:39:41.433Z",
    "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
    "workflowTaskStartedEventAttributes": {
     "scheduledEventId": "2",
     "identity": "golden-worker",
-    "historySizeBytes": "2000"
+    "historySizeBytes": "2001"
    }
   },
   {
    "eventId": "4",
-   "eventTime": "2026-11-17T14:10:21.785Z",
+   "eventTime": "2026-11-17T14:39:41.441Z",
    "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
    "workflowTaskCompletedEventAttributes": {
     "scheduledEventId": "2",
     "identity": "golden-worker",
-    "binaryChecksum": "a88f53d2b6224e0e0930e27ec92f00ce",
+    "binaryChecksum": "707f587dedf392b71e2c870d4a2b093e",
     "sdkMetadata": {
      "coreUsedFlags": [
       2,
@@ -89,11 +89,11 @@
   },
   {
    "eventId": "5",
-   "eventTime": "2026-11-17T14:10:21.785Z",
+   "eventTime": "2026-11-17T14:39:41.441Z",
    "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_FAILED",
    "workflowExecutionFailedEventAttributes": {
     "failure": {
-     "message": "Invalid process definition: step 'mystery': unknown type 'mystery_step_type' (known: activity, approval, for_each, pause, workflow); step 'two_args': `args:` has 2 elements; an activity takes one argument: pass a dict (or one value); step 'old_kwargs': `kwargs:` was renamed `options:` (they are execute_activity options, not activity arguments); step 'bad_option': unknown `options:` ['not_an_option'] (known: ['activity_id', 'schedule_to_close_timeout', 'schedule_to_start_timeout', 'summary', 'task_queue']); step 'no_activity': missing `activity:`; step 'old_signal_name': `signal_name:` was removed: a pause step is resumed by `resume_step(step_id, data)` under its own id; step 'bad_policy': unknown `parent_close_policy: obliterate` (known: ['abandon', 'request_cancel', 'terminate']); step 'listed_policy': `args:` has 2 elements; a child workflow takes one argument: pass a dict (or one value); step 'listed_policy': unknown `parent_close_policy: ['abandon']` (known: ['abandon', 'request_cancel', 'terminate']); step 'zero_timeout': `timeout:` must be seconds (more than 0); step 'pause_in_loop': for_each can't run an inner step of type 'pause' (it can run: activity, workflow); step 'inner_on_error': inner step: `on_error:` belongs on the for_each step; step 'bad_syntax': condition '{{results.first}} ~~ 1' can't be evaluated: invalid syntax (<unknown>, line 1); step 'bad_syntax': {{results.first}}: a parallel process runs its steps at once, so a step can't read another step's result; step 'unsafe_call': condition '__import__('os') == None' can't be evaluated: Unsupported AST node type: Call; step 'refs': {{results.never_ran}}: a parallel process runs its steps at once, so a step can't read another step's result; step 'refs': {{results.first}}: a parallel process runs its steps at once, so a step can't read another step's result; step 'refs': {{item.name}} is used outside a for_each inner step; step 'refs': {{results}} is not a placeholder: use {{results.<step>...}}, {{input....}} or, inside for_each, {{item...}}; step 'first': its id is used by an earlier step; step 'first': unknown `on_error: retry` (known: continue)",
+     "message": "Invalid process definition: step 'mystery': unknown type 'mystery_step_type' (known: activity, approval, for_each, pause, workflow); step 'two_args': `args:` has 2 elements; an activity takes one argument: pass a dict (or one value); step 'old_kwargs': `kwargs:` was renamed `options:` (they are execute_activity options, not activity arguments); step 'bad_option': unknown `options:` ['not_an_option'] (known: ['activity_id', 'schedule_to_close_timeout', 'schedule_to_start_timeout', 'summary', 'task_queue']); step 'no_activity': missing `activity:`; step 'old_signal_name': `signal_name:` was removed: a pause step is resumed by `resume_step(step_id, data)` under its own id; step 'bad_policy': unknown `parent_close_policy: obliterate` (known: ['abandon', 'request_cancel', 'terminate']); step 'listed_policy': `args:` has 2 elements; a child workflow takes one argument: pass a dict (or one value); step 'listed_policy': unknown `parent_close_policy: ['abandon']` (known: ['abandon', 'request_cancel', 'terminate']); step 'zero_timeout': `timeout:` must be seconds (more than 0, at most 10 years); step 'pause_in_loop': for_each can't run an inner step of type 'pause' (it can run: activity, workflow); step 'inner_on_error': inner step: `on_error:` belongs on the for_each step; step 'bad_syntax': condition '{{results.first}} ~~ 1' can't be evaluated: invalid syntax (<unknown>, line 1); step 'bad_syntax': {{results.first}}: a parallel process runs its steps at once, so a step can't read another step's result; step 'unsafe_call': condition '__import__('os') == None' can't be evaluated: Unsupported AST node type: Call; step 'refs': {{results.never_ran}}: a parallel process runs its steps at once, so a step can't read another step's result; step 'refs': {{results.first}}: a parallel process runs its steps at once, so a step can't read another step's result; step 'refs': {{item.name}} is used outside a for_each inner step; step 'refs': {{results}} is not a placeholder: use {{results.<step>...}}, {{input....}} or, inside for_each, {{item...}}; step 'first': its id is used by an earlier step; step 'first': unknown `on_error: retry` (known: continue)",
      "stackTrace": "",
      "applicationFailureInfo": {
       "type": "ProcessDefinitionError",

@@ -16,7 +16,8 @@ absent from the results. Each returns the results by step id once every in-fligh
 
 A run first checks its definition (validation.py, with this class's step types): one that can't run, a None
 definition included, fails the run at once with a non-retryable `ProcessDefinitionError` naming every problem (also
-when the check itself crashes, e.g. on a product step type's `check`). So does a condition that can't be evaluated
+when the check itself crashes, e.g. on a product step type's `check`; but a Temporal error the check raises, such as
+the sandbox refusing an import or call, fails the workflow task instead, so the run waits for fixed code). So does a condition that can't be evaluated
 (bad syntax, a dict or list compared; a comparison its values can't support is false instead), and a step that
 finds its definition wrong while running; `on_error:
 continue` does not apply to these. Any other error a step type raises that isn't a Temporal failure becomes a
@@ -111,6 +112,10 @@ class ProcessWorkflowBase:
 
         try:
             problems = process_problems(process_def, self.step_types, parallel=parallel)
+        except TemporalError:
+            # The SDK's own errors (a sandbox restriction, nondeterminism) are a bug in the code, not the file: they
+            # fail the workflow task, retried until a fixed worker runs it, instead of failing the run for good.
+            raise
         except Exception as e:  # a malformed value the checks didn't foresee: fail the run, not the task (for ever)
             raise definition_error(
                 f"Invalid process definition: checking it failed: {type(e).__name__}: {e}"

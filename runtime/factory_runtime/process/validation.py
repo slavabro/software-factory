@@ -15,15 +15,17 @@ What is checked, each problem naming its step:
   `on_error` of its own: the `for_each` step's apply);
 - placeholders (every value but `description:`): `{{results.<step>...}}` names an earlier step (in a parallel
   process, none: its steps run at once, so a step can't read a sibling's result), `{{item...}}` appears only inside
-  a `for_each` inner step, and a placeholder that starts `results`, `input` or `item` is a whole one. Other text in
-  double braces (`{{name}}`) is literal and left alone, except in a `condition:`, where it can't be evaluated; an
-  escaped `\\{{...}}` is always literal.
+  a `for_each` inner step, and a placeholder that starts `results`, `input` or `item`, or a near miss of one followed
+  by a path (`{{inputs.x}}`, `{{Result.a}}`), is a whole one. Other text in double braces (`{{name}}`) is literal and
+  left alone, except in a `condition:`, where it can't be evaluated; an escaped `\\{{...}}` is always literal, by the
+  runtime's own rule (`templates.split_escapes`).
 
 The validator never raises on a malformed value (a list where a name belongs, keys of mixed types): it reports it.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterator, Mapping
 
 from factory_runtime.process.errors import ProcessValidationError
@@ -36,9 +38,9 @@ from factory_runtime.process.steps import (
     StepType,
 )
 from factory_runtime.process.templates import (
-    PLACEHOLDER,
     PLACEHOLDER_ROOTS,
     condition_syntax_problem,
+    find_placeholders,
     parse_placeholder,
 )
 
@@ -80,9 +82,18 @@ def _key_problems(step: Mapping[str, Any], spec: StepType, common: frozenset[str
     return problems
 
 
+# Roots a placeholder was meant to start with when it is mistyped (any case): `{{inputs.x}}`, `{{Result.a}}`.
+_NEAR_MISS_ROOTS = frozenset({"results", "result", "input", "inputs", "item", "items"})
+_NEAR_MISS = re.compile(r"([A-Za-z]+)\.[A-Za-z_]")
+
+
 def _attempted(expression: str) -> bool:
-    """Does the text in braces start like a placeholder (`results`, `input`, `item`), so it was meant as one?"""
-    return expression.split(".", 1)[0] in PLACEHOLDER_ROOTS
+    """Was the text in braces meant as a placeholder? It starts `results`, `input` or `item`, or a near miss of one
+    (any case, singular or plural) followed by `.` and a name."""
+    if expression.split(".", 1)[0] in PLACEHOLDER_ROOTS:
+        return True
+    near = _NEAR_MISS.match(expression)
+    return near is not None and near.group(1).lower() in _NEAR_MISS_ROOTS
 
 
 def _reference_problems(
@@ -99,7 +110,7 @@ def _reference_problems(
     unless `strict` (a condition, which can't evaluate it)."""
     problems: list[str] = []
     for text in _strings(value):
-        for match in PLACEHOLDER.finditer(text):
+        for match in find_placeholders(text):
             placeholder = match.group(0)
             parsed = parse_placeholder(match.group(1))
             if parsed is None and not strict and not _attempted(match.group(1)):
@@ -126,14 +137,20 @@ def _reference_problems(
     return problems
 
 
-def _interpreter_problems(process_def: Mapping[str, Any], interpreters: tuple[str, ...] | None) -> list[str]:
-    if interpreters is None or "interpreter" not in process_def or process_def["interpreter"] is None:
+def _interpreter_problems(
+    process_def: Mapping[str, Any], interpreters: tuple[str, ...] | None, default: str | None
+) -> list[str]:
+    declared = process_def.get("interpreter")
+    if interpreters is None or (declared is None and default is None):
         return []
-    interpreter = process_def["interpreter"]
-    if not isinstance(interpreter, str):
+    if declared is None:
+        if default not in interpreters:
+            return [f"no `interpreter:`, and the default `{default}` is not one of: {', '.join(interpreters)}"]
+        return []
+    if not isinstance(declared, str):
         return [f"`interpreter:` must name a workflow type (one of: {', '.join(interpreters)})"]
-    if interpreter not in interpreters:
-        return [f"unknown `interpreter: {interpreter}` (known: {', '.join(interpreters)})"]
+    if declared not in interpreters:
+        return [f"unknown `interpreter: {declared}` (known: {', '.join(interpreters)})"]
     return []
 
 
@@ -143,9 +160,11 @@ def process_problems(
     *,
     parallel: bool = False,
     interpreters: tuple[str, ...] | None = None,
+    default_interpreter: str | None = None,
 ) -> list[str]:
     """Every problem with `process_def` (empty when it can run), each naming its step. `step_types`: the product's
-    map; `interpreters`: the workflow types its `interpreter:` may name (None: unchecked)."""
+    map; `interpreters`: the workflow types its `interpreter:` may name (None: unchecked); `default_interpreter`:
+    the one that runs it when it names none (checked against `interpreters` too)."""
     if process_def is None:
         return ["Process definition is None"]
     if not isinstance(process_def, Mapping):
@@ -154,7 +173,7 @@ def process_problems(
     if not isinstance(steps, list):
         return ["`steps:` must be a list of steps"]
 
-    problems: list[str] = _interpreter_problems(process_def, interpreters)
+    problems: list[str] = _interpreter_problems(process_def, interpreters, default_interpreter)
     all_ids = {s["id"] for s in steps if isinstance(s, Mapping) and isinstance(s.get("id"), str)}
     earlier: list[str] = []
     seen: set[str] = set()
@@ -237,14 +256,19 @@ def validate_process(
     parallel: bool | None = None,
     source: str = "",
     interpreters: tuple[str, ...] | None = None,
+    default_interpreter: str | None = None,
 ) -> None:
     """Raise ProcessValidationError listing every problem with `process_def` (`source`, e.g. its path, leads the
     message). `step_types`: the product's map (its classes' `step_types`). `parallel`: whether its steps run at
-    once; None reads the definition's `interpreter:` against PARALLEL_INTERPRETERS. `interpreters`: the workflow
-    types its `interpreter:` may name (None: unchecked)."""
+    once; None reads the definition's `interpreter:` (else `default_interpreter`) against PARALLEL_INTERPRETERS.
+    `interpreters`: the workflow types its `interpreter:` may name (None: unchecked); `default_interpreter`: the one
+    that runs it when it names none."""
     if parallel is None:
         interpreter = process_def.get("interpreter") if isinstance(process_def, Mapping) else None
+        interpreter = default_interpreter if interpreter is None else interpreter
         parallel = isinstance(interpreter, str) and interpreter in PARALLEL_INTERPRETERS
-    problems = process_problems(process_def, step_types, parallel=parallel, interpreters=interpreters)
+    problems = process_problems(
+        process_def, step_types, parallel=parallel, interpreters=interpreters, default_interpreter=default_interpreter
+    )
     if problems:
         raise ProcessValidationError(source, problems)

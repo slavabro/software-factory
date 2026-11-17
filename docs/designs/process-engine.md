@@ -184,6 +184,11 @@ literal `{{` is written `\{{` and text in braces is checked only when it starts 
 `workflow_id` / `task_queue` are filled in and its one-element `args:` list gives its element, as an activity's; a
 duration of 0 is refused; the retired keys belong to the built-in types only. The runtime's README has the details.
 
+**Review fixes in v0.10, greenfield too.** Conditions short-circuit and a comparison that can't be made is false on
+its own (a guard such as `{{input.n}} == None or {{input.n}} > 0` works); mistyped placeholder roots are refused; a
+file without `interpreter:` is checked as the default interpreter; one escape rule for the runtime and the validator;
+stricter durations, `retry:` and `options:` values; Temporal errors in the run-start check fail the task, not the run.
+
 ## 8. Build order
 
 1. **Golden runs (FamilyOffice, first):** record the synthetic golden histories and normalized commands from today's

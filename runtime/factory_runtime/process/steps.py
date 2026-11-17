@@ -15,6 +15,7 @@ its `on_error`.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from types import MappingProxyType
@@ -133,12 +134,38 @@ def build_step_retry_policy(retry: dict[str, Any] | None) -> RetryPolicy:
     return RetryPolicy(**kwargs)
 
 
+# The longest duration a file may give (seconds): beyond it a value is a mistake, and timedelta overflows.
+MAX_DURATION_SECONDS = 10 * 365 * 24 * 3600
+
+
 def _is_seconds(value: Any) -> bool:
-    """A duration in seconds: a number above 0 (0 would mean "no timeout" to the SDK, never what a file means)."""
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0
+    """A duration in seconds: a finite number above 0 (0 would mean "no timeout" to the SDK, never what a file
+    means) and at most MAX_DURATION_SECONDS."""
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    return math.isfinite(value) and 0 < value <= MAX_DURATION_SECONDS
 
 
-_SECONDS = "must be seconds (more than 0)"
+_SECONDS = "must be seconds (more than 0, at most 10 years)"
+_TEXT_OPTIONS = frozenset({"summary", "activity_id", "task_queue"})
+
+
+def _retry_problems(retry: dict[Any, Any]) -> list[str]:
+    problems = []
+    unknown = sorted(set(retry) - RETRY_KEYS, key=str)
+    if unknown:
+        problems.append(f"unknown `retry:` keys {unknown} (known: {sorted(RETRY_KEYS)})")
+    attempts = retry.get("max_attempts")
+    if "max_attempts" in retry and (not isinstance(attempts, int) or isinstance(attempts, bool) or attempts < 1):
+        problems.append("`retry.max_attempts` must be a whole number, at least 1")
+    if "initial_interval_seconds" in retry and not _is_seconds(retry["initial_interval_seconds"]):
+        problems.append(f"`retry.initial_interval_seconds` {_SECONDS}")
+    types = retry.get("non_retryable_error_types")
+    if "non_retryable_error_types" in retry and (
+        not isinstance(types, list) or not all(isinstance(t, str) and t for t in types)
+    ):
+        problems.append("`retry.non_retryable_error_types` must be a list of error type names")
+    return problems
 
 
 def _one_argument_problems(step: dict[str, Any], what: str) -> list[str]:
@@ -174,6 +201,9 @@ def _check_activity(step: dict[str, Any]) -> list[str]:
             unknown = sorted(set(options) - ACTIVITY_OPTIONS, key=str)
             if unknown:
                 problems.append(f"unknown `options:` {unknown} (known: {sorted(ACTIVITY_OPTIONS)})")
+            for key in sorted(set(options) & _TEXT_OPTIONS):
+                if not isinstance(options[key], str):
+                    problems.append(f"`options.{key}` must be text")
             for key in sorted(set(options) & _SECONDS_OPTIONS):
                 if not _is_seconds(options[key]):
                     problems.append(f"`options.{key}` {_SECONDS}")
@@ -185,9 +215,7 @@ def _check_activity(step: dict[str, Any]) -> list[str]:
         if not isinstance(retry, dict):
             problems.append("`retry:` must be a mapping")
         else:
-            unknown = sorted(set(retry) - RETRY_KEYS, key=str)
-            if unknown:
-                problems.append(f"unknown `retry:` keys {unknown} (known: {sorted(RETRY_KEYS)})")
+            problems.extend(_retry_problems(retry))
     return problems
 
 
