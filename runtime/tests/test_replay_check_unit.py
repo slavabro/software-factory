@@ -1,6 +1,8 @@
 """The worker definition, the replay check's report and parsing, and the patch report, without a server."""
 
+import asyncio
 import json
+import os
 import unittest
 from collections.abc import Sequence
 from unittest import mock
@@ -15,16 +17,23 @@ from temporalio.api.history.v1 import (
     WorkflowExecutionUpdateAcceptedEventAttributes,
 )
 from temporalio.api.update.v1 import Input, Request
+from temporalio.client import Interceptor as ClientInterceptor
+from temporalio.worker import Interceptor, Plugin
 
 from factory_runtime.temporal import WorkerDefinition, activity_names
 from factory_runtime.temporal.definition import DYNAMIC
 from factory_runtime.temporal.patches import PatchReport, PatchStatus, RunRef, history_markers
+from factory_runtime.temporal import replay_check
 from factory_runtime.temporal.replay_check import (
     MISSING_HANDLER,
     NONDETERMINISM,
     RunFailure,
     ReplayReport,
+    VisibilityUnsettled,
+    cli_parser,
+    connect,
     failure_text,
+    list_open_runs,
     load_definition,
     received_messages,
 )
@@ -45,6 +54,21 @@ class AnyWorkflow:
 @activity.defn(dynamic=True)
 async def any_activity(args: Sequence[RawValue]) -> None:
     pass
+
+
+class BothInterceptor(Interceptor, ClientInterceptor):
+    """A worker interceptor that is also a client interceptor (as tracing interceptors are)."""
+
+
+class FailureOne(Exception):
+    pass
+
+
+def client_for(defn: WorkerDefinition, *, interceptors: Sequence[object] = (), plugins: Sequence[object] = ()) -> mock.MagicMock:
+    client = mock.MagicMock()
+    client.data_converter = defn.data_converter
+    client.config.return_value = {"interceptors": list(interceptors), "plugins": list(plugins)}
+    return client
 
 
 class WorkerDefinitionTest(unittest.TestCase):
@@ -78,14 +102,14 @@ class WorkerDefinitionTest(unittest.TestCase):
         self.assertTrue(WorkerDefinition.handlers(AnyWorkflow).dynamic_signal)
 
     def test_the_worker_registers_exactly_the_named_activities_on_a_served_queue(self) -> None:
-        client = mock.MagicMock()
-        with self.assertRaisesRegex(ValueError, r"missing \['reserve_v2', 'ship'\]"):
+        client = client_for(CURRENT)
+        with self.assertRaisesRegex(ValueError, r"missing \['reserve_v2', 'ship', 'stamp'\]"):
             CURRENT.worker(client, activities=[reserve])
         with self.assertRaisesRegex(ValueError, "not one of"):
             CURRENT.worker(client, activities=ACTIVITIES, task_queue="elsewhere")
         two = WorkerDefinition(task_queues=("a", "b"), workflows=(OrderV1,))
         with self.assertRaisesRegex(ValueError, "name the task queue"):
-            two.worker(client)
+            two.worker(client_for(two))
         with mock.patch("factory_runtime.temporal.definition.Worker") as worker:
             CURRENT.worker(client, activities=ACTIVITIES, identity="w1")
         kwargs = worker.call_args.kwargs
@@ -94,12 +118,65 @@ class WorkerDefinitionTest(unittest.TestCase):
         self.assertIs(kwargs["workflow_runner"], CURRENT.workflow_runner)
         self.assertEqual(kwargs["identity"], "w1")
 
-    def test_the_replayer_uses_the_same_parts(self) -> None:
-        config = CURRENT.replayer(namespace="prod").config()
-        self.assertEqual(config["workflows"], [OrderV1])
-        self.assertIs(config["workflow_runner"], CURRENT.workflow_runner)
-        self.assertIs(config["data_converter"], CURRENT.data_converter)
-        self.assertEqual(config["namespace"], "prod")
+    def test_the_worker_and_the_replayer_use_the_same_parts(self) -> None:
+        tracing, other = BothInterceptor(), Interceptor()
+        defn = WorkerDefinition(
+            task_queues=(QUEUE,),
+            workflows=(OrderV1,),
+            activity_names=activity_names(ACTIVITIES),
+            interceptors=(tracing, other),
+            workflow_failure_exception_types=(FailureOne,),
+        )
+        replayer = defn.replayer(namespace="prod").config()
+        self.assertEqual(replayer["workflows"], [OrderV1])
+        self.assertIs(replayer["workflow_runner"], defn.workflow_runner)
+        self.assertIs(replayer["data_converter"], defn.data_converter)
+        self.assertEqual(replayer["namespace"], "prod")
+        self.assertEqual(replayer["interceptors"], [tracing, other])
+        self.assertEqual(replayer["workflow_failure_exception_types"], [FailureOne])
+        for client_interceptors, given in (([], [tracing, other]), ([tracing], [other])):
+            with self.subTest(client_interceptors=client_interceptors):
+                # The worker prepends the client's worker interceptors: together they must be the definition's.
+                with mock.patch("factory_runtime.temporal.definition.Worker") as worker:
+                    defn.worker(client_for(defn, interceptors=client_interceptors), activities=ACTIVITIES)
+                kwargs = worker.call_args.kwargs
+                self.assertEqual(kwargs["interceptors"], given)
+                self.assertEqual(kwargs["workflow_failure_exception_types"], [FailureOne])
+                self.assertIs(kwargs["workflow_runner"], defn.workflow_runner)
+
+    def test_the_worker_refuses_what_its_replayer_would_not_have(self) -> None:
+        tracing = BothInterceptor()
+        with_tracing = WorkerDefinition(task_queues=(QUEUE,), workflows=(OrderV1,), interceptors=(Interceptor(), tracing))
+        other_converter = client_for(CURRENT)
+        other_converter.data_converter = mock.MagicMock()
+        cases = {
+            "data converter": (CURRENT, other_converter, {}),
+            "client interceptor": (CURRENT, client_for(CURRENT, interceptors=[tracing]), {}),
+            "client interceptor out of order": (with_tracing, client_for(with_tracing, interceptors=[tracing]), {}),
+            "client plugin": (CURRENT, client_for(CURRENT, plugins=[mock.MagicMock(spec=Plugin)]), {}),
+            "interceptors option": (CURRENT, client_for(CURRENT), {"interceptors": [Interceptor()]}),
+            "plugins option": (CURRENT, client_for(CURRENT), {"plugins": [mock.MagicMock(spec=Plugin)]}),
+            "runner option": (CURRENT, client_for(CURRENT), {"workflow_runner": mock.MagicMock()}),
+            "unsandboxed runner option": (CURRENT, client_for(CURRENT), {"unsandboxed_workflow_runner": mock.MagicMock()}),
+            "failure types option": (CURRENT, client_for(CURRENT), {"workflow_failure_exception_types": [FailureOne]}),
+        }
+        for name, (defn, client, options) in cases.items():
+            activities = ACTIVITIES if defn is CURRENT else []
+            with self.subTest(name), mock.patch("factory_runtime.temporal.definition.Worker") as worker:
+                with self.assertRaises(ValueError):
+                    defn.worker(client, activities=activities, **options)
+                worker.assert_not_called()
+        # A client plugin that isn't a worker plugin, and a client-only interceptor, change nothing in the worker.
+        with mock.patch("factory_runtime.temporal.definition.Worker"):
+            CURRENT.worker(client_for(CURRENT, interceptors=[ClientInterceptor()], plugins=[object()]), activities=ACTIVITIES)
+
+    def test_connect_uses_the_definitions_converter(self) -> None:
+        with mock.patch("factory_runtime.temporal.definition.Client.connect", new=mock.AsyncMock()) as connect_:
+            asyncio.run(CURRENT.connect("host:1", namespace="ns"))
+        args, kwargs = connect_.call_args
+        self.assertEqual(args, ("host:1",))
+        self.assertIs(kwargs["data_converter"], CURRENT.data_converter)
+        self.assertEqual(kwargs["namespace"], "ns")
 
     def test_load_definition(self) -> None:
         self.assertIs(load_definition("tests.replay_workflows:CURRENT"), CURRENT)
@@ -107,6 +184,70 @@ class WorkerDefinitionTest(unittest.TestCase):
         for spec in ("tests.replay_workflows", "tests.replay_workflows:QUEUE"):
             with self.subTest(spec=spec), self.assertRaises((ValueError, TypeError)):
                 load_definition(spec)
+
+
+class FakeRun:
+    def __init__(self, run_id: str) -> None:
+        self.id, self.run_id = f"wf-{run_id}", run_id
+
+
+class FakeClient:
+    """`list_workflows` yields each listing in turn (the last one repeats)."""
+
+    def __init__(self, *listings: list[str]) -> None:
+        self.listings = list(listings)
+        self.calls = 0
+
+    def list_workflows(self, query: str) -> object:
+        listing = self.listings[min(self.calls, len(self.listings) - 1)]
+        self.calls += 1
+
+        async def runs() -> object:
+            for run_id in listing:
+                yield FakeRun(run_id)
+
+        return runs()
+
+
+class VisibilityTest(unittest.TestCase):
+    def test_two_listings_that_agree_are_the_open_runs(self) -> None:
+        client = FakeClient(["a"], ["a", "b"], ["b", "a"])
+        runs = asyncio.run(list_open_runs(client, pause=0))  # type: ignore[arg-type]
+        self.assertEqual(sorted(r.run_id for r in runs), ["a", "b"])
+        self.assertEqual(client.calls, 3)
+
+    def test_a_listing_that_keeps_changing_couldnt_be_checked(self) -> None:
+        client = FakeClient(*[[str(i)] for i in range(20)])
+        with self.assertRaises(VisibilityUnsettled):
+            asyncio.run(list_open_runs(client, pause=0, attempts=4))  # type: ignore[arg-type]
+        self.assertEqual(client.calls, 5)
+
+
+class ConnectTest(unittest.TestCase):
+    def tls(self, argv: list[str], env_key: str | None, settings_key: str | None = None) -> tuple[bool, object]:
+        from factory_runtime.temporal import TemporalSettings
+
+        defn = WorkerDefinition(
+            task_queues=(QUEUE,), workflows=(OrderV1,), settings=TemporalSettings(task_queue=QUEUE, api_key=settings_key)
+        )
+        args = cli_parser("x", "y").parse_args(["m:a", *argv])
+        env = {k: v for k, v in os.environ.items() if k != "TEMPORAL_API_KEY"}
+        if env_key is not None:
+            env["TEMPORAL_API_KEY"] = env_key
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch(
+            "factory_runtime.temporal.definition.Client.connect", new=mock.AsyncMock()
+        ) as connect_:
+            asyncio.run(connect(defn, args))
+        kwargs = connect_.call_args.kwargs
+        return kwargs["tls"], kwargs["api_key"]
+
+    def test_tls_follows_the_api_key_and_the_flags(self) -> None:
+        self.assertEqual(self.tls([], None), (False, None))
+        self.assertEqual(self.tls([], ""), (False, None))  # an empty key is no key
+        self.assertEqual(self.tls([], "k"), (True, "k"))
+        self.assertEqual(self.tls(["--no-tls"], "k"), (False, "k"))
+        self.assertEqual(self.tls(["--tls"], None), (True, None))
+        self.assertEqual(self.tls([], None, settings_key="s"), (True, "s"))
 
 
 class ReportTest(unittest.TestCase):
