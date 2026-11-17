@@ -7,6 +7,11 @@
             "type": "command",
             "command": "PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}\" python3 -m skillcheck --hook 2>/dev/null || true",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "PYTHONPATH=\"${CLAUDE_PLUGIN_ROOT}\" python3 -m sfactory cost hook 2>/dev/null || true",
+            "timeout": 5
           }
         ]
       }

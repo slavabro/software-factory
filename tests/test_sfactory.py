@@ -12,7 +12,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "plugins" / "factory"))
 
-from sfactory import config, deprecations, guard, manifests, runner, upgrade, versions  # noqa: E402
+from sfactory import config, costconfig, deprecations, guard, manifests, runner, upgrade, versions  # noqa: E402
+
+# `factory run` checks budgets first: never against the developer's own budget file.
+costconfig.USER_CONFIG = Path(tempfile.gettempdir()) / "sfactory-tests-no-user-config" / "factory.toml"
 
 
 def write(root: Path, rel: str, text: str) -> None:
@@ -202,7 +205,8 @@ class GuardTests(unittest.TestCase):
                     "git push", "git push origin --delete factory/x", "git -C . push origin main", "git -c a=b push origin main",
                     "gh -R o/r pr merge 3", "gh api graphql -f query='mutation { mergePullRequest(input:{}) { clientMutationId } }'",
                     "find . -name x -exec rm {} ;", "git push -u origin HEAD"]:
-            self.assertIsNotNone(guard.check(cmd, "main"), cmd)
+            with tempfile.TemporaryDirectory() as d:  # not this checkout: its own branch may be factory/*
+                self.assertIsNotNone(guard.check(cmd, "main", d), cmd)
 
     def test_head_push_only_from_a_factory_branch(self):
         with tempfile.TemporaryDirectory() as d:

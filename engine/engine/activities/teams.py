@@ -24,6 +24,7 @@ from engine.models import (
     WakeTeamInput,
     WakeTeamResult,
 )
+from engine import factory
 from engine import settings as settings_mod
 from engine.settings import TASK_QUEUE, EngineSettings
 
@@ -89,10 +90,14 @@ class TeamActivities:
 
     @activity.defn(name="check_budget")
     async def check_budget(self, ref: TeamRef) -> BudgetAnswer:
-        """The spend switch, read fresh on every run so turning it off takes effect at once; plan usage windows
-        (wait until the window reopens) join with F-41."""
+        """The spend switch, then the hard budgets that cover this team's runs (sfactory/cost.py, the same check as
+        `factory run`), both read fresh on every run so a change takes effect at once; plan usage windows (wait
+        until the window reopens) join with F-41."""
         if not settings_mod.load().unattended:
             return BudgetAnswer(verdict="stop", reason="unattended runs are off (engine.toml: unattended = false)")
+        over = await asyncio.to_thread(factory.cost.run_blockers, Path(ref.repo), ref.team)
+        if over:
+            return BudgetAnswer(verdict="stop", reason="budget " + "; ".join(over))
         return BudgetAnswer(verdict="go")
 
     @activity.defn(name="record_outcome")
