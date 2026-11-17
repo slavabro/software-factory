@@ -9,13 +9,18 @@ An order waits for the signal `go`, reserves (an activity), then stays open. Rel
 - `OrderPatched`: `patched("reserve-v2")` picks `reserve_v2`; runs already past the point keep `reserve`.
 - `OrderDeprecated`: `deprecate_patch("reserve-v2")`, then `reserve_v2`.
 - `OrderPatchRemoved`: `reserve_v2` with no patch call.
+- `OrderStamped`: stamps with the local activity `stamp` instead of reserving.
 """
+
+from typing import Callable, Sequence
 
 from datetime import timedelta
 
 from temporalio import activity, workflow
 
 from factory_runtime.temporal import WorkerDefinition, activity_names
+from temporalio.worker import WorkflowRunner
+
 from factory_runtime.testing.golden import default_workflow_runner
 
 QUEUE = "replay-check"
@@ -38,7 +43,12 @@ async def ship() -> None:
     pass
 
 
-ACTIVITIES = [reserve, reserve_v2, ship]
+@activity.defn
+async def stamp() -> None:
+    pass
+
+
+ACTIVITIES = [reserve, reserve_v2, ship, stamp]
 
 
 class _Order:
@@ -118,6 +128,16 @@ class OrderPatchRemoved(_Order):
         await self.wait_then("reserve_v2")
 
 
+@workflow.defn(name="Order")
+class OrderStamped(_Order):
+    @workflow.run
+    async def run(self) -> None:
+        await workflow.wait_condition(lambda: self.go_ahead)
+        await workflow.execute_local_activity("stamp", start_to_close_timeout=TIMEOUT)
+        self.stage = "reserved"
+        await workflow.wait_condition(lambda: False)
+
+
 @workflow.defn(name="Billing")
 class Billing:
     """Calls an activity on a queue no worker polls, so it stays pending."""
@@ -127,13 +147,18 @@ class Billing:
         await workflow.execute_activity("charge", task_queue="billing", start_to_close_timeout=timedelta(days=1))
 
 
-def definition(*workflows: type, external: frozenset[str] = frozenset()) -> WorkerDefinition:
+def definition(
+    *workflows: type,
+    external: frozenset[str] = frozenset(),
+    activities: Sequence[Callable[..., object]] = ACTIVITIES,
+    runner: WorkflowRunner | None = None,
+) -> WorkerDefinition:
     return WorkerDefinition(
         task_queues=(QUEUE,),
         workflows=workflows,
-        activity_names=activity_names(ACTIVITIES),
+        activity_names=activity_names(activities),
         external_activity_names=external,
-        workflow_runner=default_workflow_runner(),
+        workflow_runner=runner or default_workflow_runner(),
     )
 
 

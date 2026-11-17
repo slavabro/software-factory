@@ -45,34 +45,49 @@ DEFINITION = WorkerDefinition(
     workflow_runner=build_workflow_runner(passthrough=...),
     data_converter=data_converter(settings.compress_min_bytes, settings.warn_bytes),
     interceptors=(...), workflow_failure_exception_types=(...),
-    settings=settings,                           # where the check connects by default
+    settings=settings,                           # where connect() and the check connect by default
 )
+client = await DEFINITION.connect()                                    # the definition's data converter
 worker = DEFINITION.worker(client, activities=build_activities(...))  # raises if the activities differ
 ```
 
-`external_activity_names` names activity types the workflows call that other workers serve. `replayer()` gives the
-matching `Replayer`.
+`external_activity_names` names activity types the workflows call that other workers serve (not local activities:
+those run on this worker and must be in `activity_names`). `replayer()` gives the matching `Replayer`. So the two
+can't drift, `worker()` refuses a client whose data converter isn't the definition's, a client carrying worker
+plugins or worker interceptors that aren't the first of the definition's `interceptors` (`Worker` would add them),
+and the `Worker` options that change how workflow code runs (`REPLAY_OPTIONS`: workflows, runners, interceptors,
+plugins, failure types); put those in the definition. A test environment's client carries an interceptor of its own:
+workers in tests connect with `definition.connect(env.client.service_client.config.target_host)`.
 
-**`python -m factory_runtime.temporal.replay_check MODULE:ATTR [--server HOST:PORT] [--namespace NS] [--tls]
-[--json]`** (ATTR: the definition or a function returning it; flags override `definition.settings`; an API key comes
-from the settings or `$TEMPORAL_API_KEY`). It lists every open run in the namespace with no type filter and, for the
-definition's queues, fails a run whose type isn't registered, replays each history through the definition's
-`Replayer` (nondeterminism reported apart from other replay failures), and checks what runs call next: each pending
-activity's type, each received signal's and update's handler, and each schedule's workflow type on those queues.
-Runs on other queues are counted for information; one of a type the definition registers fails. The report gives
-counts per type and each failure's kind, workflow id, type, run id and error message, never payloads. Exit **0**
-pass, **1** runs would break (or the definition didn't load): reject the release, **2** couldn't check (Temporal or
-visibility unreachable): retry. In code: `await check_open_runs(client, definition)` returns the `ReplayReport`.
+**`python -m factory_runtime.temporal.replay_check MODULE:ATTR [--server HOST:PORT] [--namespace NS]
+[--tls | --no-tls] [--json]`** (ATTR: the definition or a function returning it; flags override
+`definition.settings`; an API key comes from the settings or a non-empty `$TEMPORAL_API_KEY` and turns TLS on unless
+`--no-tls`). It builds the definition's replayer first, then lists every open run in the namespace with no type
+filter (until two listings agree) and, for the definition's queues, fails a run whose type isn't registered, replays
+each history through the definition's `Replayer` (nondeterminism reported apart from other replay failures), and
+checks what runs call next: each pending activity's type, each local activity the code starts while replaying (one
+in flight at the end of the history included), each received signal's and update's handler, and each schedule's
+workflow type on those queues. Runs and schedules on other queues are counted for information; one of a type the
+definition registers fails. Runs are matched by workflow id and reported under the run id visibility lists (a reset
+run's history names the run it was reset from). The report gives counts per type and each failure's kind, workflow
+id, type, run id and error message, never payloads. Exit **0** pass, **1** runs would break, or the definition
+didn't load or no replayer can be built from it: reject the release, **2** couldn't check (Temporal or visibility
+unreachable, or visibility kept changing): retry, **64** bad command line. In code: `await check_open_runs(client,
+definition)` returns the `ReplayReport`.
 
 Replay proves only that recorded commands come out the same: not options, payloads, nor code past the end of a
 history (golden tests cover those), and not the queries a client sends (they leave no history; pin handler names in
 a product test).
 
 **`python -m factory_runtime.temporal.patches MODULE:ATTR [same options]`** (`await patch_report(client,
-definition)`): replays open runs with `workflow.patched` instrumented and reports per patch id the runs on its old
-side (it returned False while replaying), the runs carrying a non-deprecated marker, and the rest, with the step the
-lifecycle allows: keep `patched(id)` → `deprecate_patch(id)` once no run is on the old side → remove the call once
-no run carries a non-deprecated marker. Exit 1 when runs had to be left out (replay failed, type unregistered).
+definition)`): replays open runs, recording each patch call's answer at the workflow instance (so any import style,
+a module passed through the sandbox and an unsandboxed runner are all seen), and reports per patch id the runs on its
+old side (`patched` or `deprecate_patch` answered False while replaying), the runs carrying a non-deprecated marker,
+and the rest, with the step the lifecycle allows: keep `patched(id)` → `deprecate_patch(id)` once no run is on the
+old side → remove the call once no run carries a non-deprecated marker. **This report is the gate for each step.**
+The replay check also fails a premature step, but only when the two sides issue different commands: a patch that
+changes only a value in workflow state replays either way. Exit 1 when runs had to be left out (replay failed, type
+unregistered, a run of a registered type on a queue the definition doesn't serve).
 
 ## `factory_runtime.process`
 

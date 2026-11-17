@@ -11,10 +11,15 @@ import unittest
 import uuid
 from typing import Callable
 
+from temporalio.api.common.v1 import WorkflowExecution as ExecutionRef
+from temporalio.api.taskqueue.v1 import TaskQueue
+from temporalio.api.workflowservice.v1 import PollWorkflowTaskQueueRequest, ResetWorkflowExecutionRequest
 from temporalio.client import Client, Schedule, ScheduleActionStartWorkflow, ScheduleSpec, ScheduleState
 from temporalio.testing import WorkflowEnvironment
+from temporalio.worker import UnsandboxedWorkflowRunner
 
-from factory_runtime.temporal import data_converter
+from factory_runtime.temporal import build_workflow_runner, data_converter
+from factory_runtime.temporal.sandbox import STRICT_IMPORT_POLICY
 from factory_runtime.temporal.patches import patch_report
 from factory_runtime.temporal.patches import main as patches_main
 from factory_runtime.temporal.replay_check import (
@@ -28,7 +33,8 @@ from factory_runtime.temporal.replay_check import (
     check_open_runs,
 )
 from factory_runtime.temporal.replay_check import main as check_main
-from factory_runtime.testing import query_eventually
+from factory_runtime.testing import TEST_PASSTHROUGH_MODULES, query_eventually
+from tests.patch_import_workflows import VALUE_PATCH, ValueDeprecated, ValueOld, ValuePatched
 from tests.replay_workflows import (
     ACTIVITIES,
     PATCH,
@@ -39,8 +45,12 @@ from tests.replay_workflows import (
     OrderPatched,
     OrderPatchRemoved,
     OrderReordered,
+    OrderStamped,
     OrderV1,
     definition,
+    reserve,
+    reserve_v2,
+    ship,
 )
 
 VISIBILITY_SECONDS = 10
@@ -52,12 +62,15 @@ class LocalServerTest(unittest.IsolatedAsyncioTestCase):
         self.addAsyncCleanup(self.env.shutdown)
         self.client: Client = self.env.client
         self.server = self.client.service_client.config.target_host
+        # Workers connect as a product's do: the test environment's client carries a worker interceptor of its own,
+        # which the replayer wouldn't have, so `WorkerDefinition.worker` refuses it.
+        self.worker_client = await definition(OrderV1).connect(self.server)
 
-    async def start(self, workflow_class: type, *, go: bool, nudge: bool = False) -> str:
+    async def start(self, workflow_class: type, *, go: bool, nudge: bool = False, **kwargs: object) -> str:
         """Start an order under the release `workflow_class`, optionally let it reserve; returns the run id once the
         worker has stopped."""
-        defn = definition(workflow_class, Billing)
-        async with defn.worker(self.client, activities=ACTIVITIES):
+        defn = definition(workflow_class, Billing, **kwargs)  # type: ignore[arg-type]
+        async with defn.worker(self.worker_client, activities=ACTIVITIES):
             handle = await self.client.start_workflow("Order", id=f"order-{uuid.uuid4()}", task_queue=QUEUE)
             await query_eventually(handle, "current_stage", lambda s: s == "waiting")
             if nudge:
@@ -145,7 +158,7 @@ class ReplayCheckTest(LocalServerTest):
         self.assertEqual(report.checked, {"Legacy": 1, "Order": 1})
 
     async def test_a_pending_activity_whose_type_was_removed_fails(self) -> None:
-        async with definition(OrderV1, Billing).worker(self.client, activities=ACTIVITIES):
+        async with definition(OrderV1, Billing).worker(self.worker_client, activities=ACTIVITIES):
             handle = await self.client.start_workflow(Billing.run, id="billing-1", task_queue=QUEUE)
             for _ in range(50):  # until the activity is scheduled
                 if (await handle.describe()).raw_description.pending_activities:
@@ -193,6 +206,81 @@ class ReplayCheckTest(LocalServerTest):
         self.assertEqual(self.kinds(report), [(OTHER_QUEUE, stray.result_run_id)])
         self.assertEqual(report.checked, {})
 
+        # The patch report leaves that run out too, and so isn't complete.
+        patches = await patch_report(self.client, definition(OrderV1))
+        self.assertFalse(patches.complete)
+        self.assertEqual([(f.kind, f.run_id) for f in patches.failures], [(OTHER_QUEUE, stray.result_run_id)])
+
+    async def test_a_schedule_on_another_queue_that_starts_a_registered_type_fails(self) -> None:
+        for schedule_id, workflow_type, queue in (("stray", "Order", "old-queue"), ("theirs", "Gone", "elsewhere")):
+            await self.client.create_schedule(
+                schedule_id,
+                Schedule(
+                    action=ScheduleActionStartWorkflow(workflow_type, id=f"{schedule_id}-run", task_queue=queue),
+                    spec=ScheduleSpec(intervals=[]),
+                    state=ScheduleState(paused=True),
+                ),
+            )
+        report = await self.check(OrderV1)
+        self.assertEqual([(f.kind, f.workflow_id, f.workflow_type) for f in report.failures], [
+            (OTHER_QUEUE, "stray", "Order")
+        ])
+
+    async def test_a_removed_local_activity_fails(self) -> None:
+        stamped = await self.start(OrderStamped, go=True)
+        await self.start(OrderStamped, go=False)  # not yet at the local activity: fine either way
+        await self.visible(2)
+        self.assertEqual((await self.check(OrderStamped)).failures, [])
+        without_stamp = [reserve, reserve_v2, ship]
+        report = await self.check(OrderStamped, activities=without_stamp)
+        self.assertEqual(self.kinds(report), [(MISSING_ACTIVITY, stamped)])
+        self.assertIn("local activity 'stamp'", report.failures[0].error)
+        # A local activity runs on this worker: another worker serving the type doesn't help.
+        report = await self.check(OrderStamped, activities=without_stamp, external=frozenset({"stamp"}))
+        self.assertEqual(self.kinds(report), [(MISSING_ACTIVITY, stamped)])
+
+    async def test_a_local_activity_in_flight_at_the_end_of_the_history_is_checked(self) -> None:
+        """A worker took the task that starts the local activity and died: the history ends there, with no marker."""
+        run_id = await self.start(OrderStamped, go=False)
+        handle = self.client.get_workflow_handle([r async for r in self.client.list_workflows()][0].id, run_id=run_id)
+        await handle.signal("go")
+        task = await self.client.workflow_service.poll_workflow_task_queue(
+            PollWorkflowTaskQueueRequest(namespace=self.client.namespace, task_queue=TaskQueue(name=QUEUE))
+        )
+        self.assertEqual(task.workflow_execution.run_id, run_id)
+        await self.visible(1)
+        report = await self.check(OrderStamped, activities=[reserve, reserve_v2, ship])
+        self.assertEqual(self.kinds(report), [(MISSING_ACTIVITY, run_id)])
+        self.assertIn("local activity 'stamp'", report.failures[0].error)
+
+    async def test_a_reset_run_is_checked_under_its_own_run_id(self) -> None:
+        old = await self.start(OrderV1, go=True)
+        handle = self.client.get_workflow_handle(
+            [r async for r in self.client.list_workflows("ExecutionStatus = 'Running'")][0].id, run_id=old
+        )
+        history = await handle.fetch_history()
+        last_completed = [e.event_id for e in history.events if e.HasField("workflow_task_completed_event_attributes")]
+        response = await self.client.workflow_service.reset_workflow_execution(
+            ResetWorkflowExecutionRequest(
+                namespace=self.client.namespace,
+                workflow_execution=ExecutionRef(workflow_id=handle.id, run_id=old),
+                reason="test",
+                workflow_task_finish_event_id=last_completed[-1],
+                request_id=uuid.uuid4().hex,
+            )
+        )
+        reset = response.run_id
+        self.assertNotEqual(reset, old)
+        await self.visible(1)
+
+        report = await self.check(OrderV1)
+        self.assertEqual(report.failures, [])
+        self.assertEqual(report.checked, {"Order": 1})
+        self.assertEqual(self.kinds(await self.check(OrderReordered)), [(NONDETERMINISM, reset)])
+        patches = await patch_report(self.client, definition(OrderPatched))
+        self.assertTrue(patches.complete)
+        self.assertEqual([r.run_id for r in patches.patches[PATCH].old_side], [reset])
+
 
 class PatchLifecycleTest(LocalServerTest):
     async def test_a_patch_from_introduction_to_removal(self) -> None:
@@ -237,6 +325,38 @@ class PatchLifecycleTest(LocalServerTest):
         self.assertNotIn(not_reached, [f.run_id for f in report.failures])
 
 
+class ValueOnlyPatchTest(LocalServerTest):
+    """A patch that changes only a value: replay can't block a premature deprecation (no command differs), so the
+    patch report is the gate, and it must see `patched` however the workflow module imports it and runs."""
+
+    RUNNERS = {
+        "sandboxed": lambda: build_workflow_runner(TEST_PASSTHROUGH_MODULES, import_policy=STRICT_IMPORT_POLICY),
+        "passed through": lambda: build_workflow_runner(
+            (*TEST_PASSTHROUGH_MODULES, "tests.patch_import_workflows"), import_policy=STRICT_IMPORT_POLICY
+        ),
+        "unsandboxed": UnsandboxedWorkflowRunner,
+    }
+
+    async def test_the_patch_report_keeps_a_value_only_patch_with_a_run_on_its_old_side(self) -> None:
+        old_side = await self.start(ValueOld, go=True)
+        await self.start(ValueOld, go=False)
+        await self.visible(2)
+
+        # Deprecating early replays: replay is no gate for a value-only patch.
+        self.assertEqual((await self.check(ValueDeprecated)).failures, [])
+
+        for name, runner in self.RUNNERS.items():
+            for release in (ValuePatched, ValueDeprecated):
+                with self.subTest(runner=name, release=release.__name__):
+                    report = await patch_report(self.client, definition(release, runner=runner()))
+                    self.assertTrue(report.complete, report.render())
+                    status = report.patches[VALUE_PATCH]
+                    self.assertEqual([r.run_id for r in status.old_side], [old_side])
+                    self.assertFalse(status.can_deprecate)
+                    self.assertIn(f"{VALUE_PATCH}: old side 1, non-deprecated marker 0, others 1 -> keep patched()",
+                                  report.render())
+
+
 class UnreachableTest(unittest.TestCase):
     def test_an_unreachable_server_exits_2(self) -> None:
         for main in (check_main, patches_main):
@@ -250,6 +370,21 @@ class UnreachableTest(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(check_main(["tests.replay_workflows:MISSING"]), 1)
             self.assertEqual(check_main(["tests.replay_workflows:QUEUE"]), 1)
+
+    def test_a_definition_whose_replayer_cant_be_built_exits_1_before_connecting(self) -> None:
+        for main in (check_main, patches_main):
+            with self.subTest(main=main.__module__):
+                err = io.StringIO()
+                with contextlib.redirect_stderr(err):
+                    code = main(["tests.bad_sandbox_workflows:DEFINITION", "--server", "127.0.0.1:1"])
+                self.assertEqual(code, 1, err.getvalue())
+                self.assertIn("replayer", err.getvalue())
+
+    def test_a_bad_command_line_exits_64(self) -> None:
+        for main in (check_main, patches_main):
+            with self.subTest(main=main.__module__), contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(main([]), 64)
+                self.assertEqual(main(["tests.replay_workflows:CURRENT", "--bogus"]), 64)
 
 
 if __name__ == "__main__":

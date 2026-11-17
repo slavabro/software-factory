@@ -15,20 +15,29 @@ decide, up to 365 to execute), so every deploy must keep every open run replayin
 `factory_runtime.temporal.replay_check` — given a client, the product's workflow classes, its data converter and
 sandbox runner:
 
-- lists every **open** run on the worker's task queues, with **no type filter**
-  (`ExecutionStatus = 'Running' AND TaskQueue = …`), so a run whose type was removed or renamed fails the check
-  instead of failing for ever after the deploy; it also reports open runs on queues the worker doesn't serve;
+- lists every **open** run in the namespace, with **no type filter** (`ExecutionStatus = 'Running'`), so a run whose
+  type was removed or renamed fails the check instead of failing for ever after the deploy; runs on the worker's
+  task queues are checked, open runs on queues the worker doesn't serve are reported (one of a type it registers
+  fails);
 - streams each history through Temporal's `Replayer`, built from the **same worker definition the product's worker
-  uses** (one owner of workflows, runner, converter, interceptors: the product exposes it once and both the worker and
-  the check build from it);
-- checks what open runs will call **next**, which replay can't see: every pending activity's type, every schedule's
-  workflow type, and the message handlers (signals, updates, queries) open runs were started with, must exist on the
-  new worker;
+  uses** (one owner of workflows, runner, converter, interceptors, failure types: the product exposes it once and both
+  the worker and the check build from it; the worker refuses a client with another converter, client interceptors or
+  plugins the replayer wouldn't have, and worker options that change how workflow code runs);
+- checks what open runs will call **next**, which replay can't see: every pending activity's type, every local
+  activity the code starts while replaying (recorded by an interceptor on the check's replayer, one in flight at the
+  end of the history included; it must be registered on this worker itself, another worker serving the type doesn't
+  count), every schedule's workflow type (on another queue: a registered type fails, as a run there would), and the
+  handler of every signal and update open runs have received, must exist on the new worker. Queries leave no trace
+  in history, so the check can't see which ones clients send: the query handlers of long-lived workflows are pinned
+  by the product's own tests (section 4);
 - reports runs checked per type and each failure (workflow id, type, run id, the error), nondeterminism apart from
   other failures; no payload data in the report;
+- matches each replay to its run by workflow id and reports the run id visibility lists (a reset run's history
+  names the run it was reset from); lists the open runs until two listings agree;
 - a CLI, `python -m factory_runtime.temporal.replay_check <module:definition>`: exit 0 when everything passes,
-  **1** when runs would break (reject the release), **2** when it couldn't check (Temporal or visibility unreachable:
-  retry).
+  **1** when runs would break or no replayer can be built from the definition (built before connecting): reject the
+  release; **2** when it couldn't check (Temporal or visibility unreachable, or visibility kept changing): retry; 64
+  on a bad command line. TLS: on with an API key (an empty `$TEMPORAL_API_KEY` is none) unless `--no-tls`.
 
 Replay proves that the commands each open run already recorded still come out the same; it does not check options
 or payloads, nor code beyond the end of a history (measured). Those stay covered by golden tests in CI. A change that
@@ -72,10 +81,13 @@ else:
 Lifecycle, one id per change: `patched(id)` while open runs are on its old side → `deprecate_patch(id)` once none
 are → the call removed once no open run carries a non-deprecated marker for it. History alone can't tell "passed the
 point on old code" from "never reached it", so `factory_runtime.temporal.patches` answers by replay: it replays open
-runs with `patched` instrumented and reports per patch id the runs on the old side (it returned False while
-replaying), the runs carrying a non-deprecated marker (read from history), and the rest. The replay check itself
-also blocks a premature step: deprecating or removing a patch while a run still depends on it fails replay. Golden
-tests record both sides: the old recordings keep proving the old branch, a new recording proves the new.
+runs recording each patch call's answer at the workflow instance (whatever the import style, sandboxed, passed
+through or unsandboxed) and reports per patch id the runs on the old side (`patched` or `deprecate_patch` answered
+False while replaying), the runs carrying a non-deprecated marker (read from history), and the rest. **The patch
+report is the gate for each step.** The replay check fails a premature step only when the two sides issue different
+commands; a patch that changes only a value kept in workflow state (measured: deprecating it with a run on the old
+side replays) passes replay either way, and only the report catches it. Golden tests record both sides: the old
+recordings keep proving the old branch, a new recording proves the new.
 
 ## 4. CI side
 

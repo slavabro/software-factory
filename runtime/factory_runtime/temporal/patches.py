@@ -3,48 +3,58 @@
 The lifecycle of a behaviour change (docs/designs/safe-deploys.md §3): `workflow.patched(id)` while open runs are on
 its old side, then `workflow.deprecate_patch(id)` once none are, then the call removed once no open run carries a
 non-deprecated marker for it. History alone can't tell "passed the point on old code" from "never reached it", so
-`patch_report(client, definition)` replays every open run on the definition's queues with `workflow.patched`
-instrumented, and reports per patch id:
+`patch_report(client, definition)` replays every open run on the definition's queues and records each patch call's
+answer (`replay_check.ReplayRecorder`, at the workflow instance, so `workflow.patched`, `from temporalio.workflow
+import patched`, a module passed through the sandbox and an unsandboxed runner are all seen), and reports per patch id:
 
-- `old_side`: runs where `patched(id)` returned False while replaying (they passed the point on the old code);
+- `old_side`: runs where `patched(id)` (or `deprecate_patch(id)`) answered False while replaying: they passed the
+  point on the old code;
 - `marked`: runs whose history carries a non-deprecated marker for the id (they took the new side; removing the
   call breaks them; deprecating is fine);
 - `others`: the rest of the runs checked (never reached the point, or carry only a deprecated marker).
 
 `can_deprecate` is "no run on the old side"; `can_remove` is that and "no non-deprecated marker". A patch id the
-code calls but no open run reached does not appear. The replay check (`replay_check`) blocks a premature step on its
-own: deprecating or removing too early fails replay.
+code calls but no open run reached does not appear. This report is the gate for each step. The replay check
+(`replay_check`) also fails a premature step, but only when the two sides issue different commands; a patch that
+changes only a value kept in workflow state (or anything else that issues no command) replays either way, so for it
+the report is the only gate: deprecate or remove only when it says so.
 
-CLI: `python -m factory_runtime.temporal.patches MODULE:ATTR [--server …] [--namespace …] [--tls] [--json]`, the
-same options as the replay check. Exit 0: every run replayed and the report is complete; 1: some runs failed to
-replay or are of a type the definition doesn't register (the report leaves them out); 2: couldn't check.
+CLI: `python -m factory_runtime.temporal.patches MODULE:ATTR [--server …] [--namespace …] [--tls | --no-tls]
+[--json]`, the same options and connection rules as the replay check. Exit 0: every open run that could matter was
+replayed and the report is complete; 1: some were left out (replay failed, type unregistered, or a run of a
+registered type sits on a queue the definition doesn't serve), or the definition did not load or no replayer can be
+built from it; 2: couldn't check; 64: bad command line.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import sys
-import threading
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Iterator, Sequence
+from typing import Any, Sequence
 
-from temporalio import workflow
 from temporalio.api.history.v1 import HistoryEvent
-from temporalio.client import Client, WorkflowHistory
+from temporalio.client import Client, WorkflowExecution, WorkflowHistory
 
 from factory_runtime.temporal.definition import WorkerDefinition
 from factory_runtime.temporal.replay_check import (
+    EXIT_PASS,
+    EXIT_REJECT,
+    EXIT_RETRY,
     UNREGISTERED_TYPE,
+    ReplayRecorder,
     RunFailure,
     cli_parser,
     connect,
     failure_text,
-    fetch_histories,
     list_open_runs,
     load_or_exit,
+    other_queue_failures,
+    parse_args,
     replay_failure,
+    replay_runs,
+    run_failure,
     served_runs,
 )
 
@@ -79,7 +89,7 @@ class PatchStatus:
 class PatchReport:
     runs_checked: int = 0
     patches: dict[str, PatchStatus] = field(default_factory=dict)
-    failures: list[RunFailure] = field(default_factory=list)  # runs left out: replay failed or type unregistered
+    failures: list[RunFailure] = field(default_factory=list)  # runs left out: replay failed, unregistered, elsewhere
 
     @property
     def complete(self) -> bool:
@@ -120,37 +130,8 @@ class PatchReport:
 
 
 # ---------------------------------------------------------------------------------------------------------------
-# Instrumenting workflow.patched
+# What history says
 # ---------------------------------------------------------------------------------------------------------------
-
-# run id -> [(patch id, returned value, replaying)]
-_calls: dict[str, list[tuple[str, bool, bool]]] = {}
-_lock = threading.Lock()  # one report at a time per process: the instrument is module-wide
-
-
-@contextlib.contextmanager
-def _instrumented_patched() -> Iterator[dict[str, list[tuple[str, bool, bool]]]]:
-    """Swap `temporalio.workflow.patched` (shared with the sandbox, which passes temporalio through) for a recorder.
-    A workflow module imported in the sandbox during replay binds the recorder, even with `from … import patched`."""
-    original = workflow.patched
-
-    def recording_patched(id: str, **kwargs: Any) -> bool:
-        value = original(id, **kwargs)
-        replaying = workflow.unsafe.is_replaying()
-        _calls.setdefault(workflow.info().run_id, []).append((id, value, replaying))
-        return value
-
-    if not _lock.acquire(blocking=False):
-        raise RuntimeError("a patch report is already running in this process")
-    try:
-        _calls.clear()
-        workflow.patched = recording_patched
-        try:
-            yield _calls
-        finally:
-            workflow.patched = original
-    finally:
-        _lock.release()
 
 
 def history_markers(events: Sequence[HistoryEvent]) -> dict[str, bool]:
@@ -171,37 +152,33 @@ def history_markers(events: Sequence[HistoryEvent]) -> dict[str, bool]:
 async def patch_report(client: Client, definition: WorkerDefinition) -> PatchReport:
     """Replay every open run on the definition's queues and report each patch id's runs (module docstring)."""
     report = PatchReport()
-    registered, unregistered, _ = served_runs(definition, await list_open_runs(client))
+    registered, unregistered, elsewhere = served_runs(definition, await list_open_runs(client))
     for run in unregistered:
-        error = "workflow type is not registered on this worker"
-        report.failures.append(RunFailure(UNREGISTERED_TYPE, run.id, run.workflow_type, run.run_id or "", error))
+        report.failures.append(run_failure(UNREGISTERED_TYPE, run, "workflow type is not registered on this worker"))
+    report.failures.extend(other_queue_failures(definition, elsewhere))
     if not registered:
         return report
 
-    by_run = {run.run_id: run for run in registered}
-    markers: dict[str, dict[str, bool]] = {}
+    markers: dict[str, dict[str, bool]] = {}  # workflow id -> patch id -> deprecated
     replayed: list[RunRef] = []
 
-    async def histories() -> AsyncIterator[WorkflowHistory]:
-        async for history in fetch_histories(client, registered):
-            markers[history.run_id] = history_markers(history.events)
-            yield history
+    async def read_markers(run: WorkflowExecution, history: WorkflowHistory) -> None:
+        markers[run.id] = history_markers(history.events)
 
-    with _instrumented_patched() as calls:
-        async with definition.replayer(namespace=client.namespace).workflow_replay_iterator(histories()) as results:
-            async for result in results:
-                run = by_run[result.history.run_id]
-                if (failure := replay_failure(result, run.workflow_type)) is not None:
-                    report.failures.append(failure)
-                    continue
-                replayed.append(RunRef(run.id, run.workflow_type, result.history.run_id))
-        recorded = {run_id: list(c) for run_id, c in calls.items()}
+    recorder = ReplayRecorder()
+    async for run, result in replay_runs(client, definition, registered, recorder, read_markers):
+        if (failure := replay_failure(result, run)) is not None:
+            report.failures.append(failure)
+            continue
+        replayed.append(RunRef(run.id, run.workflow_type, run.run_id or ""))
 
     report.runs_checked = len(replayed)
     for ref in replayed:
-        old = {pid for pid, value, replaying in recorded.get(ref.run_id, []) if replaying and not value}
-        marked = {pid for pid, deprecated in markers.get(ref.run_id, {}).items() if not deprecated}
-        for pid in old | marked | set(markers.get(ref.run_id, {})) | {c[0] for c in recorded.get(ref.run_id, [])}:
+        answers = recorder.patches.get(ref.workflow_id, {})
+        run_markers = markers.get(ref.workflow_id, {})
+        old = {pid for pid, value in answers.items() if not value}
+        marked = {pid for pid, deprecated in run_markers.items() if not deprecated}
+        for pid in set(answers) | set(run_markers):
             report.patches.setdefault(pid, PatchStatus(pid))
         for pid in old:
             report.patches[pid].old_side.append(ref)
@@ -213,9 +190,12 @@ async def patch_report(client: Client, definition: WorkerDefinition) -> PatchRep
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = cli_parser(
-        "python -m factory_runtime.temporal.patches", "Report where open runs stand on each patch marker."
-    ).parse_args(argv)
+    args = parse_args(
+        cli_parser("python -m factory_runtime.temporal.patches", "Report where open runs stand on each patch marker."),
+        argv,
+    )
+    if isinstance(args, int):
+        return args
     definition = load_or_exit(args.definition)
     if isinstance(definition, int):
         return definition
@@ -227,9 +207,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         report = asyncio.run(run())
     except Exception as e:
         print(f"Patch report COULD NOT CHECK: {type(e).__name__}: {failure_text(e)}", file=sys.stderr)
-        return 2
+        return EXIT_RETRY
     print(json.dumps(report.as_dict(), indent=2) if args.json else report.render())
-    return 0 if report.complete else 1
+    return EXIT_PASS if report.complete else EXIT_REJECT
 
 
 if __name__ == "__main__":
