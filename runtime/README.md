@@ -106,9 +106,9 @@ queue), the process loader, the memo its pages read (`schedule_memo`, the memo o
 schedules start paused (`initially_paused`), its `ScheduleDefinition` subclass, and the metadata argument of an
 on-demand run.
 
-**Known quirks**, kept because running workflows replay against this code; change one only behind a patch marker (safe deploys, above)
-(`tests/test_process_quirks.py` pins most by name; the golden runs in `tests/test_process_golden.py` pin every
-step-level one command by command):
+**Known quirks**, kept because running workflows replay against this code; change one only behind a patch marker
+(safe deploys, above; `tests/test_process_quirks.py` pins most by name; the golden runs in
+`tests/test_process_golden.py` pin every step-level one command by command):
 
 - Templates resolve only whole strings (`"x {{input.a}}"` stays as written); conditions substitute each placeholder
   in place, a string as its repr; a missing path gives None.
