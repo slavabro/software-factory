@@ -48,6 +48,25 @@ install = []                  # install the changed manifests in the worktree (p
 deprecation_check = []        # commands whose output shows deprecation warnings (tests with warnings on, a build)
 max_prs = 3                   # per run; the upgrade capability is also the engine's team `upgrade`
 
+[efficiency]                  # the efficiency scout (docs/tasks/F-32-efficiency-scout.md)
+enabled = false               # true = the engine's team `efficiency`; `factory efficiency scan` works either way
+schedule = "0 7 * * 1"        # cron in the engine's time zone; "off" = manual runs only
+scope = "repo"                # "repo": this repo, its worktrees and `repos` · "all": every project on the machine
+since = "7d"                  # the window a run looks back over (7d, 24h, 2w or a date)
+sources = ["sessions", "runs", "runtime"]   # dev sessions, the factory's own runs, the app's runtime usage
+repos = []                    # more repo paths whose sessions count as this repo's
+projects_dir = "~/.claude/projects"         # where the agent client keeps session transcripts
+runtime_usage = ""            # command printing the app's model usage as JSONL (schema in the F-32 spec);
+                              # {since} = the window start, ISO 8601, shell-quoted; runs in the repo root
+thresholds = {}               # e.g. { repeat_read_min = 4, min_usd = 1 }; every key and default: DEFAULT_THRESHOLDS
+                              # in sfactory/config.py
+disabled = []                 # detector names not run (e.g. ["permission-prompts"])
+ignore = []                   # globs of session working dirs and file paths left out
+poll_commands = ["gh pr checks", "gh run view", "gh run watch", "gh run list", "gh pr view", "docker ps"]
+corrections = []              # regexes for a prompt that corrects the agent; empty = the built-in patterns
+expensive_models = ["*opus*"] # model globs that count as top tier for runtime jobs
+max_tasks = 5                 # tasks or PRs one run files
+
 [teams.qa]                    # a standing team the engine runs (docs/designs/engine.md); one table per team
 prompt = "/factory:qa"        # required: what the agent session is asked to do
 schedule = "0 2 * * *"        # cron in the engine's time zone; "off" (default) = events and `factory engine run-now` only
@@ -74,7 +93,10 @@ wake_on = ["ci_red"]          # events that wake it: ci_red, deploy_failed, inci
 | `factory config` | resolved config |
 | `factory upgrade scan [--json]` | what can move, how far (patch / minor / major), risky or not, release-notes links |
 | `<check> 2>&1 \| factory upgrade deprecations` | deprecation warnings raised from the repo's own code; exit 1 while any |
+| `factory efficiency scan [--since 7d] [--all] [--json] [--top N]` | wasted tokens and repeated work in this repo's sessions, its worktrees, factory runs and runtime usage (`--all`: every project), priced; metrics, paths and command names only |
+| `factory efficiency show SESSION [--json]` | one session's tool calls: paths, command names, result sizes, cost, flags E (error) P (approval) S (sleep) |
 | `factory task …` | the task system ([tasks.md](tasks.md)): `init`, `new`, `start`, `subtask`, `complete`, `close`, `set`, `show`, `check`, `check-pr`, `render`, `exists`; with `system = "commands"` only `new` / `exists`, running the repo's commands with every value shell-quoted |
+| `factory run efficiency [--dry-run] [--keep]` | the efficiency scout unattended, like `run upgrade`: the agent runs `/factory:efficiency`, files tasks or factory PRs |
 | `factory run upgrade [--dry-run] [--keep]` | the whole upgrade unattended: fresh worktree off `origin/<default_branch>`, `[worktree] setup`, then the agent runs `/factory:upgrade`; one run per repo at a time; log under `~/.cache/software-factory/logs/<repo>/` |
 | `factory engine install --repo PATH` | the engine runs this repo's teams: each team's `schedule` becomes a Temporal Schedule (in the engine's time zone, `engine.toml` `time_zone`, default the machine's), paused until its first run by hand |
 | `factory engine run-now --repo PATH --team T` · `status` · `pause` · `resume` · `signal` | run a team now, see schedules and recent runs, pause or resume a team, wake teams on an event ([engine/README.md](../engine/README.md)) |

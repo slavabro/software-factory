@@ -13,6 +13,7 @@ laptops. It stays in a project when it encodes that project's domain or its live
 | Temporal core (client, data converter, sandbox, activity helpers, run history, signal-with-start, test kit) | FamilyOffice `common/temporal/` | `runtime/factory_runtime/temporal` (F-42 R1, v0.3); FamilyOffice's `common/temporal` binds it to its settings and installs it from the same commit as its action pin |
 | YAML process engine (interpreters, step types, templates, schedules, on-demand runs) | FamilyOffice `workflows/interpreters/`, `workflows/schedulers/`, `yaml_utils`, `process_runs` | `runtime/factory_runtime/process` (F-42 R2, v0.4); FamilyOffice declares its four workflow classes and its decision step on it, and keeps its processes, UI vocabulary and decision domain |
 | Dependency upgrades | by hand, occasionally | `/factory:upgrade` + `factory run/schedule upgrade` (F-01) |
+| Session efficiency review | by hand, reading transcripts | `factory efficiency scan / show` + `/factory:efficiency` (F-32) |
 | Fleet tower skill + `fleet.py` | `~/.claude/skills/fleet/` (untracked, backup in `~/.claude/backups/`) | `home/skills/fleet/`, symlinked back; Telegram rules split into a reference that loads only when Telegram is on |
 | `tower` launcher | `~/.local/bin/tower` (untracked) | `home/bin/tower`, symlinked back |
 
