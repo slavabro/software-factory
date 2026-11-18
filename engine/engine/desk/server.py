@@ -67,7 +67,12 @@ MARKER = "X-Factory-Desk"
 HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",
-    "Referrer-Policy": "no-referrer",
+    # same-origin, not no-referrer: under no-referrer a browser sends `Origin: null` even on a same-origin form POST
+    # (Fetch, "serialize a request origin"), and the Origin check would refuse every change. same-origin still sends
+    # no Referer (so no ?token=) to another site. The confirm page's form and every other form post from a page the
+    # desk served under this policy, so they carry the desk's real Origin; a 303 after a POST becomes a GET, which
+    # needs none.
+    "Referrer-Policy": "same-origin",
     "Cache-Control": "no-store",
     MARKER: "1",
 }

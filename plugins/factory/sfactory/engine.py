@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import tomllib
 from collections.abc import Callable, Iterator
@@ -59,6 +60,9 @@ SERVICE_ENV = {"FACTORY_ENGINE_STATE", "FACTORY_ENGINE_HOME", "FACTORY_ENGINE_CO
 PROJECT = os.environ.get("FACTORY_ENGINE_PROJECT", "software-factory")  # Docker Compose project
 SNAPSHOT = ("engine", "runtime", "plugins/factory")  # what a build needs at run time
 COMMIT = "COMMIT"  # in each build: the commit it was snapshotted from (not an input of the Build ID)
+BOOTSTRAP_TRIES = 4  # launchd: bootstrap attempts after a bootout
+DESK_STOP_WAIT = 20.0  # seconds launchd may take to let the desk go
+LOCK_PATIENCE = 2.0  # seconds a deploy, start or stop waits for the deploy lock before it is refused
 SHUTDOWN_ALLOWANCE = 90  # seconds a stopping worker gets: 10 s graceful + 30 s agent kill grace + margin
 
 # Build ID: the code the worker runs (docs/designs/engine.md, section 6): the engine, the runtime and the factory's
@@ -503,9 +507,9 @@ def systemd_unit(build: str, spec: dict) -> str:
 
 
 def desk_unit(spec: dict) -> str:
-    # process: a stop or restart signals the desk alone. The upgrade it starts runs in a session of its own but in
-    # the desk's control group, and restarts the desk: with mixed (the worker's), systemd would kill it with the desk.
-    return _systemd_unit("software factory desk", spec, "KillMode=process\nRestart=always\nRestartSec=10\n")
+    # mixed, as the worker's: what the desk leaves behind is killed with it. The upgrade it starts is not in its
+    # control group: on systemd it runs as a transient unit of its own (engine/ops.py, systemd-run).
+    return _systemd_unit("software factory desk", spec, "KillMode=mixed\nRestart=always\nRestartSec=10\n")
 
 
 def _systemd_unit(description: str, spec: dict, policy: str) -> str:
@@ -525,14 +529,38 @@ def _linger() -> None:
         print("factory engine: run `loginctl enable-linger` (may need sudo) so the engine keeps running after logout")
 
 
+def _launchd_reload(label: str, path: Path, stop_wait: float) -> str:
+    """Boot the job out, wait (at most `stop_wait` s) until launchd no longer has it, then bootstrap the plist, a few
+    tries: bootout returns before the job is gone, and a bootstrap meanwhile fails ("5: Input/output error").
+    "" when it is loaded, else why not, in words."""
+    domain = f"gui/{os.getuid()}"
+    _run(["launchctl", "bootout", f"{domain}/{label}"], capture_output=True)
+    deadline = time.monotonic() + stop_wait
+    while _label_present(label):
+        if time.monotonic() >= deadline:
+            return f"launchd still had {label} {stop_wait:.0f} s after it was told to stop"
+        time.sleep(0.5)
+    error = ""
+    for attempt in range(BOOTSTRAP_TRIES):
+        proc = _run(["launchctl", "bootstrap", domain, str(path)], capture_output=True)
+        if proc.returncode == 0:
+            return ""
+        lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+        error = lines[-1] if lines else f"exit {proc.returncode}"
+        if attempt + 1 < BOOTSTRAP_TRIES:
+            time.sleep(1 + attempt)
+    return f"launchd could not start {label} ({error})"
+
+
 def start_worker(build: str, build_dir: Path, python: Path) -> str:
     spec = worker_service(build, build_dir, python)
     if sys.platform == "darwin":
         path = _plist_path(build)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(plistlib.dumps(spec))
-        _run(["launchctl", "bootout", f"gui/{os.getuid()}/{spec['Label']}"], capture_output=True)
-        _run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(path)], check=True)
+        error = _launchd_reload(spec["Label"], path, SHUTDOWN_ALLOWANCE + 10)
+        if error:
+            raise SystemExit(f"factory engine: the worker for build {build} did not start: {error}")
         return f"launchd {spec['Label']}"
     if shutil.which("systemctl"):
         unit = _unit_path(build)
@@ -558,8 +586,9 @@ def stop_worker(build: str) -> None:
 
 def start_desk(build: str) -> str | None:
     """(Re)start the desk on `build` when its service is missing or differs (a new build, a new PATH); None when it
-    already runs exactly that. The upgrade the desk starts calls this too: it runs in a session of its own, so the
-    desk's restart does not stop it."""
+    already runs exactly that. The upgrade the desk starts calls this too; it is not the desk's child (its own
+    session on macOS, its own unit on systemd), so the restart does not stop it. Never raises over the service
+    manager: a desk that did not start is said in words, and the deploy goes on (retire, reconcile)."""
     build_dir = BUILDS / build
     spec = desk_service(build_dir, build_dir / ".venv" / "bin" / "python")
     if sys.platform == "darwin":
@@ -568,8 +597,9 @@ def start_desk(build: str) -> str | None:
             return None
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(text)
-        _run(["launchctl", "bootout", f"gui/{os.getuid()}/{DESK_LABEL}"], capture_output=True)
-        _run(["launchctl", "bootstrap", f"gui/{os.getuid()}", str(path)], check=True)
+        error = _launchd_reload(DESK_LABEL, path, DESK_STOP_WAIT)
+        if error:
+            return f"did not start on build {build}: {error}; `factory engine start` tries again"
         return f"launchd {DESK_LABEL} on build {build}"
     if shutil.which("systemctl"):
         unit, text = _unit_for(DESK_LABEL), desk_unit(spec)
@@ -577,9 +607,11 @@ def start_desk(build: str) -> str | None:
             return None
         unit.parent.mkdir(parents=True, exist_ok=True)
         unit.write_text(text)
-        _run(["systemctl", "--user", "daemon-reload"], check=True)
-        _run(["systemctl", "--user", "enable", unit.name], check=True)
-        _run(["systemctl", "--user", "restart", unit.name], check=True)
+        for step in (["daemon-reload"], ["enable", unit.name], ["restart", unit.name]):
+            proc = _run(["systemctl", "--user", *step], capture_output=True)
+            if proc.returncode:
+                why = (proc.stderr or proc.stdout or f"exit {proc.returncode}").strip()[-300:]
+                return f"did not start on build {build}: systemctl {step[0]} failed ({why}); `factory engine start` tries again"
         _linger()
         return f"systemd {unit.name} on build {build}"
     print("factory engine: no launchd or systemd here; run the desk yourself: " + " ".join(spec["ProgramArguments"]))
@@ -593,6 +625,33 @@ def stop_desk() -> None:
     elif shutil.which("systemctl"):
         _run(["systemctl", "--user", "disable", "--now", f"{DESK_LABEL}.service"], capture_output=True)
         _unit_for(DESK_LABEL).unlink(missing_ok=True)
+
+
+def spawn_detached(name: str, argv: list[str], cwd: Path, log: Path) -> str:
+    """Run `argv` so that it outlives whoever started it, even when that is a service being restarted (the desk
+    starts the upgrade that restarts the desk), with stdin closed and its output appended to `log`. Returns how, in
+    words; RuntimeError with the reason when it could not start.
+
+    - systemd: a transient user unit of its own (`systemd-run --user --unit <name> --collect`), outside the starter's
+      control group, so stopping the starter's unit (KillMode=mixed) never reaches it.
+    - launchd and elsewhere: a session of its own (start_new_session), outside the starter's process group, which is
+      what launchd stops with a job.
+    """
+    if sys.platform != "darwin" and shutil.which("systemd-run"):
+        target = str(log).replace("%", "%%")
+        cmd = ["systemd-run", "--user", f"--unit={name}", "--collect", "--quiet", f"--working-directory={cwd}",
+               "-p", f"StandardOutput=append:{target}", "-p", f"StandardError=append:{target}",
+               *[f"--setenv={k}={v}" for k, v in service_env().items()], "--", *argv]
+        proc = _run(cmd, capture_output=True, stdin=subprocess.DEVNULL, timeout=60)
+        if proc.returncode:
+            raise RuntimeError(f"systemd-run failed: {(proc.stderr or proc.stdout).strip()[-300:]}")
+        return f"systemd unit {name}"
+    with open(log, "a") as out:
+        child = subprocess.Popen(argv, cwd=cwd, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                                 start_new_session=True, close_fds=True)
+    # Reaped by a thread while this process lives; once it is gone (a restarted desk), init reaps it.
+    threading.Thread(target=child.wait, name=f"reap-{name}", daemon=True).start()
+    return f"its own session (pid {child.pid})"
 
 
 def _label_present(label: str) -> bool:
@@ -658,13 +717,19 @@ def retire(python: Path, keep: str) -> list[str]:
 def deploy_lock(what: str) -> Iterator[None]:
     """One change to the engine's builds and services at a time on this machine (install, upgrade, start, stop; the
     desk runs upgrade): a second is refused, not queued. The lock goes with its process, so one that crashed never
-    blocks the next. While held, the lock file names the holder (`deploy_running` reads it)."""
+    blocks the next. While held, the lock file names the holder (`deploy_running` reads it). It waits LOCK_PATIENCE
+    for a lock that is only being probed (`deploy_running` holds a shared lock for an instant) before refusing."""
+    deadline = time.monotonic() + LOCK_PATIENCE
     with ExitStack() as held:
-        try:
-            fd = held.enter_context(_locked(DEPLOY_LOCK, blocking=False))
-        except BlockingIOError:
-            raise SystemExit(f"factory engine: {deploy_running() or 'another engine change'} is running; "
-                             "try again when it has finished") from None
+        while True:
+            try:
+                fd = held.enter_context(_locked(DEPLOY_LOCK, blocking=False))
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise SystemExit(f"factory engine: {deploy_running() or 'another engine change'} is running; "
+                                     "try again when it has finished") from None
+                time.sleep(0.05)
         os.ftruncate(fd, 0)
         os.write(fd, f"{what} (pid {os.getpid()}) since {time.strftime('%Y-%m-%d %H:%M:%S')}\n".encode())
         try:
@@ -674,23 +739,24 @@ def deploy_lock(what: str) -> Iterator[None]:
 
 
 def deploy_running() -> str | None:
-    """Who holds the deploy lock ("upgrade (pid N) since T"), or None. Reads the holder's line without touching the
-    lock, so asking never makes a real deploy fail. A line left by a holder that died (its pid gone) counts as none.
-    Advisory: the deploy that is started still takes the lock itself, and is refused if it lost a race."""
+    """Who holds the deploy lock ("upgrade (pid N) since T"), or None. Decided by the lock itself, never by the line
+    or its pid (a holder that died, a pid reused after a reboot): a shared lock that can't be had means an exclusive
+    holder. The probe holds its shared lock only for an instant, and `deploy_lock` waits that out, so asking never
+    makes a real deploy fail. Advisory: the deploy that is started still takes the lock itself."""
     try:
-        line = DEPLOY_LOCK.read_text().strip()
+        fd = os.open(DEPLOY_LOCK, os.O_RDONLY)
     except OSError:
         return None
-    pid = line.partition("(pid ")[2].partition(")")[0]
-    if not pid.isdigit():
-        return None
     try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            line = os.read(fd, 4096).decode(errors="replace").strip()
+            return line or "another engine change"
+        fcntl.flock(fd, fcntl.LOCK_UN)
         return None
-    except PermissionError:
-        pass  # alive, someone else's
-    return line
+    finally:
+        os.close(fd)
 
 
 def install(repos: list[str]) -> int:
@@ -735,8 +801,9 @@ def main(argv: list[str]) -> int:
                 if not _service_present(build):  # restarting a running worker would cancel its runs
                     start_worker(build, BUILDS / build, BUILDS / build / ".venv" / "bin" / "python")
             current = current_build()
-            if current:
-                start_desk(current)  # left alone when it already runs the current build
+            said = start_desk(current) if current else None  # None: it already runs the current build
+            if said:
+                print(f"factory engine: desk: {said}")
         print("factory engine: started")
         return 0
     if cmd == "stop":

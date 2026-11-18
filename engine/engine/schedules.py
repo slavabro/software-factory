@@ -7,10 +7,13 @@ through the time runs once on waking), jitter 5 minutes. New schedules start pau
 hand. Reconciling creates, updates (keeping paused and its note) and deletes schedules to match the config. A repo
 that can't be read this time (no network, a broken config) keeps its schedules untouched and is reported.
 
-An unchanged schedule is left alone and not reported. The server keeps a cron as calendars, so the schedule as
-described can't be compared with the one built here; instead each schedule carries a digest of what reconcile built
-(`spec_digest`, in its action's memo, the one part of a schedule an update can change and a describe returns as
-given), and only a schedule whose digest differs is updated. A change to `build` changes every digest, so each
+An unchanged schedule is left alone and not reported. The server keeps a cron as calendars, so the cron as described
+can't be compared with the one built here. Instead each schedule carries a digest of what reconcile built
+(`spec_digest`, in its action's memo, which an update can change and a describe returns as given; being the action's
+memo, it is also on each tick run's memo), and a schedule is updated when its digest differs, or when a field whose
+server shape is stable has drifted (`drifted`: time zone, jitter, overlap, catchup window, the action's workflow, ID,
+task queue and input), e.g. after an edit in Temporal's UI. A cron edited there is put back only when the config or
+`build` next changes, since the cron itself can't be compared. A change to `build` changes every digest, so each
 schedule is updated once."""
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from temporalio.client import (
     ScheduleUpdate,
     ScheduleUpdateInput,
 )
+from temporalio.api.common.v1 import Payload
 from temporalio.service import RPCError
 
 from engine.factory import config
@@ -124,6 +128,27 @@ def build(want: Desired, paused: bool, note: str, time_zone: str = "UTC") -> Sch
     return schedule
 
 
+def drifted(client: Client, have: Schedule, want: Schedule) -> bool:
+    """Whether the schedule on the server differs from the built one in a field the server returns as given."""
+    a, b = have.action, want.action
+    if not (isinstance(a, ScheduleActionStartWorkflow) and isinstance(b, ScheduleActionStartWorkflow)):
+        return True
+    try:
+        wanted = client.data_converter.payload_converter.to_payloads(list(b.args))
+    except Exception:  # noqa: BLE001 — can't tell: set it again
+        return True
+    got = list(a.args)
+    same_args = len(got) == len(wanted) and all(
+        isinstance(g, Payload) and g.data == w.data and dict(g.metadata) == dict(w.metadata) for g, w in zip(got, wanted)
+    )
+
+    def fields(s: Schedule, x: ScheduleActionStartWorkflow) -> tuple[object, ...]:
+        return (s.spec.time_zone_name, s.spec.jitter, s.policy.overlap, s.policy.catchup_window, x.workflow, x.id,
+                x.task_queue)
+
+    return not same_args or fields(have, a) != fields(want, b)
+
+
 def described_digest(client: Client, schedule: Schedule) -> str | None:
     """The digest a schedule on the server carries; None for one made before schedules carried it."""
     action = schedule.action
@@ -153,7 +178,8 @@ async def reconcile(client: Client, settings: EngineSettings) -> list[str]:
             def update(inp: ScheduleUpdateInput, w: Desired = w, changed: list[bool] = changed) -> ScheduleUpdate | None:
                 state = inp.description.schedule.state  # keep paused and its note: the team's, not the config's
                 new = build(w, paused=state.paused, note=state.note or "", time_zone=settings.time_zone)
-                if described_digest(client, inp.description.schedule) == spec_digest(new):
+                have = inp.description.schedule
+                if described_digest(client, have) == spec_digest(new) and not drifted(client, have, new):
                     return None  # unchanged: left alone
                 changed.append(True)
                 return ScheduleUpdate(schedule=new)

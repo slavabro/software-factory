@@ -9,6 +9,8 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -190,16 +192,40 @@ class EngineInstallTest(unittest.TestCase):
         self.assertIn('ExecStart="/b/my builds/abc/.venv/bin/python" "-m" "engine.desk"', unit)
         self.assertIn("Restart=always", unit)
         # Only the desk is signalled: the upgrade it started (same control group) restarts it and must live on.
-        self.assertIn("KillMode=process", unit)
+        # As the worker's: the upgrade the desk starts is outside its reach (its own unit, `spawn_detached`).
+        self.assertIn("KillMode=mixed", unit)
         self.assertIn(f"StandardOutput=append:{self.tmp / 'state' / 'desk.log'}", unit)
 
-    def services(self, platform: str) -> list[list[str]]:
-        """Service-manager calls recorded, not made; the plist and unit files in the temp dir."""
+    def services(self, platform: str, gone_after: int = 0, bootstrap_fails: int = 0) -> list[list[str]]:
+        """Service-manager calls recorded, not made, against a fake launchd whose bootout takes `gone_after` more
+        `print`s to finish (it is asynchronous) and whose first `bootstrap_fails` bootstraps fail; the plist and unit
+        files in the temp dir."""
         calls: list[list[str]] = []
+        loaded: dict[str, int] = {}  # label → prints left until it is gone (-1: loaded and staying)
+        fails = [bootstrap_fails]
 
         def run(cmd, **kw):
             calls.append(cmd)
-            return subprocess.CompletedProcess(cmd, 0, "", "")  # every service loaded and running
+            if cmd[:2] == ["launchctl", "bootout"]:
+                label = cmd[2].rpartition("/")[2]
+                if label in loaded:
+                    loaded[label] = gone_after
+            elif cmd[:2] == ["launchctl", "print"]:
+                label = cmd[2].rpartition("/")[2]
+                left = loaded.get(label)
+                if left is None:
+                    return subprocess.CompletedProcess(cmd, 113, "", "not found")
+                if left == 0:
+                    del loaded[label]
+                    return subprocess.CompletedProcess(cmd, 113, "", "not found")
+                if left > 0:
+                    loaded[label] = left - 1
+            elif cmd[:2] == ["launchctl", "bootstrap"]:
+                if fails[0]:
+                    fails[0] -= 1
+                    return subprocess.CompletedProcess(cmd, 5, "", "Bootstrap failed: 5: Input/output error")
+                loaded[Path(cmd[3]).stem] = -1
+            return subprocess.CompletedProcess(cmd, 0, "", "")  # systemd: every step works, every unit active
 
         for name, value in (("_run", run), ("_plist_for", lambda label: self.tmp / "agents" / f"{label}.plist"),
                             ("_unit_for", lambda label: self.tmp / "units" / f"{label}.service")):
@@ -212,7 +238,76 @@ class EngineInstallTest(unittest.TestCase):
         w = mock.patch.object(engine.shutil, "which", lambda name: f"/usr/bin/{name}")
         w.start()
         self.addCleanup(w.stop)
+        z = mock.patch.object(engine.time, "sleep", lambda seconds: None)
+        z.start()
+        self.addCleanup(z.stop)
         return calls
+
+    def test_a_desk_restart_waits_for_launchd_to_let_go_and_retries_bootstrap(self):
+        calls = self.services("darwin", gone_after=3, bootstrap_fails=2)
+        self.assertEqual(engine.start_desk("b1"), f"launchd {engine.DESK_LABEL} on build b1")
+        self.assertEqual(sum(1 for c in calls if c[1:2] == ["bootstrap"]), 3)  # two failures, then it took
+        calls.clear()
+        self.assertEqual(engine.start_desk("b2"), f"launchd {engine.DESK_LABEL} on build b2")
+        verbs = [c[1] for c in calls if c[0] == "launchctl"]
+        first = verbs.index("bootstrap")
+        self.assertEqual(verbs[:first].count("print"), 4)  # bootout returned at once; it was gone on the 4th look
+
+    def test_a_desk_that_wont_start_is_said_and_the_deploy_goes_on(self):
+        self.services("darwin", bootstrap_fails=99)
+        said = engine.start_desk("b1")
+        self.assertIn("did not start on build b1", said)
+        self.assertIn("Input/output error", said)
+        order = []
+        with mock.patch.object(engine, "snapshot", return_value=("b1", self.tmp / "b1")), \
+             mock.patch.object(engine, "ensure_venv", return_value=self.tmp / "py"), \
+             mock.patch.object(engine, "_service_present", return_value=True), \
+             mock.patch.object(engine, "current_build", return_value="b1"), \
+             mock.patch.object(engine, "engine_cli", lambda python, *a, capture=False: order.append(a[0]) or
+                               subprocess.CompletedProcess(a, 0, "", "")), \
+             mock.patch.object(engine, "retire", lambda python, keep: order.append("retire") or []):
+            out = engine.deploy()
+        self.assertEqual(order, ["set-current", "retire", "reconcile"])
+        self.assertTrue(any(line.startswith("desk: did not start on build b1") for line in out), out)
+
+    def test_a_worker_restart_waits_for_launchd_too(self):
+        calls = self.services("darwin", gone_after=2, bootstrap_fails=1)
+        engine.start_worker("b1", self.tmp / "b1", self.tmp / "py")
+        engine.start_worker("b1", self.tmp / "b1", self.tmp / "py")
+        second = [c[1] for c in calls if c[0] == "launchctl"]
+        second = second[len(second) - second[::-1].index("bootout") - 1:]  # the restart of a loaded worker
+        self.assertEqual(second, ["bootout", "print", "print", "print", "bootstrap"])
+        self.assertEqual(sum(1 for c in calls if c[1:2] == ["bootstrap"]), 3)  # 1 failure, then two starts
+        self.services("darwin", bootstrap_fails=99)
+        with self.assertRaises(SystemExit) as caught:
+            engine.start_worker("b2", self.tmp / "b2", self.tmp / "py")
+        self.assertIn("did not start", str(caught.exception))
+
+    def test_on_systemd_a_deploy_from_the_desk_is_a_unit_of_its_own(self):
+        calls = self.services("linux")
+        log = self.tmp / "d.log"
+        how = engine.spawn_detached("factory-deploy-20261118T090000Z", ["sh", "-c", "true"], self.tmp, log)
+        self.assertEqual(how, "systemd unit factory-deploy-20261118T090000Z")
+        (cmd,) = calls
+        self.assertEqual(cmd[:4], ["systemd-run", "--user", "--unit=factory-deploy-20261118T090000Z", "--collect"])
+        self.assertIn(f"StandardOutput=append:{log}", cmd)
+        self.assertIn(f"--working-directory={self.tmp}", cmd)
+        self.assertIn(f"--setenv=PATH={os.environ['PATH']}", cmd)
+        self.assertEqual(cmd[cmd.index("--") + 1:], ["sh", "-c", "true"])
+
+    def test_elsewhere_a_deploy_from_the_desk_is_a_session_of_its_own(self):
+        log = self.tmp / "d.log"
+        with mock.patch.object(engine.sys, "platform", "darwin"):
+            how = engine.spawn_detached("x", ["sh", "-c", "ps -o pgid= -p $$; echo $$"], self.tmp, log)
+        self.assertIn("its own session", how)
+        for _ in range(100):
+            lines = log.read_text().split() if log.is_file() else []
+            if len(lines) == 2:
+                break
+            time.sleep(0.05)
+        self.assertEqual(len(lines), 2, lines)
+        self.assertEqual(lines[0], lines[1])  # it leads a process group (and session) of its own…
+        self.assertNotEqual(int(lines[0]), os.getpgrp())  # …not this process's, which a service manager stops
 
     def test_the_desk_restarts_only_when_its_service_changes(self):
         for platform in ("darwin", "linux"):
@@ -268,8 +363,31 @@ class EngineInstallTest(unittest.TestCase):
         dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
         engine.DEPLOY_LOCK.write_text(f"upgrade (pid {dead.stdout.strip()}) since then\n")
         self.assertIsNone(engine.deploy_running())
+        # A line whose pid is alive (reused after a reboot, or a kill -9 left it) is not a holder either: the lock is.
+        engine.DEPLOY_LOCK.write_text(f"upgrade (pid {os.getpid()}) since then\n")
+        self.assertIsNone(engine.deploy_running())
         with engine.deploy_lock("upgrade"):  # and the lock itself is free
             pass
+
+    def test_asking_who_deploys_never_makes_a_deploy_fail(self):
+        engine.SHARE.mkdir(parents=True)
+        stop = threading.Event()
+
+        def ask():
+            while not stop.is_set():
+                engine.deploy_running()
+
+        askers = [threading.Thread(target=ask) for _ in range(4)]
+        for t in askers:
+            t.start()
+        try:
+            for _ in range(50):
+                with engine.deploy_lock("upgrade"):
+                    pass
+        finally:
+            stop.set()
+            for t in askers:
+                t.join()
 
     def test_start_and_stop_are_refused_while_a_deploy_runs(self):
         with engine.deploy_lock("upgrade"):

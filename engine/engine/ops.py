@@ -19,6 +19,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -490,6 +491,9 @@ def _git_root(path: Path) -> Path | None:
 
 
 def _checked_add(path: str) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    if not (path.startswith("~") or Path(path).is_absolute()):
+        raise OpError(f"{path}: give the repo's absolute path or a ~/… path (a relative path depends on the directory "
+                      "the command or the desk happens to run in)")
     root = Path(path).expanduser().resolve()
     if not root.is_dir() or _git_root(root) != root:
         raise OpError(f"{root} is not the top of a git checkout")
@@ -534,6 +538,8 @@ DEPLOYS = "deploys"  # <state>/deploys/<ID>.log, and <ID>.json for what it was s
 DEPLOY_ID = re.compile(r"\d{8}T\d{6}Z")  # its UTC start time; the desk serves a deploy's log by this, never a path
 EXIT_MARK = "factory desk: the upgrade exited with "  # the log's last line once the upgrade has ended
 # The upgrade runs under sh so its log ends with its exit status although nothing waits for it (the desk restarts).
+SPAWN_GRACE = 60  # seconds a just-started deploy counts as running before its upgrade holds the deploy lock
+_starting = threading.Lock()  # one start_deploy at a time in this process (the desk's request threads)
 DEPLOY_SCRIPT = f'"$1" engine upgrade; code=$?; printf "\\n{EXIT_MARK}%s\\n" "$code"; exit "$code"'
 
 
@@ -566,23 +572,16 @@ class DeployRun:
     log: str
     state: Literal["running", "done", "failed", "unknown"]
     exit_code: int | None
-    meta: dict[str, Any]  # source, head, branch, build, commit and pid, as it was started
+    meta: dict[str, Any]  # source, head, branch, build, commit, when (epoch s) and how it was started
 
 
 def _deploys(settings: EngineSettings) -> Path:
     return settings.state / DEPLOYS
 
 
-def _alive(pid: Any) -> bool:
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # alive, someone else's
-    return True
+def _ids(settings: EngineSettings) -> list[str]:
+    """The desk's deploys, newest first."""
+    return sorted((p.stem for p in _deploys(settings).glob("*.log") if DEPLOY_ID.fullmatch(p.stem)), reverse=True)
 
 
 def read_deploy(settings: EngineSettings, deploy_id: str) -> DeployRun | None:
@@ -602,14 +601,19 @@ def read_deploy(settings: EngineSettings, deploy_id: str) -> DeployRun | None:
     code = last[len(EXIT_MARK):].strip() if last.startswith(EXIT_MARK) else ""
     if code.isdigit():
         return DeployRun(deploy_id, text, "done" if code == "0" else "failed", int(code), meta)
-    return DeployRun(deploy_id, text, "running" if _alive(meta.get("pid")) else "unknown", None, meta)
+    # No exit status yet. Running is decided by the deploy lock (never a stored pid, which a reboot can hand to
+    # another process): the newest deploy runs while the lock is held, or in its first SPAWN_GRACE seconds, before
+    # the upgrade has taken the lock. Anything else ended without saying how (killed, or the machine went down).
+    started = meta.get("started")
+    fresh = isinstance(started, (int, float)) and 0 <= time.time() - started < SPAWN_GRACE
+    newest = _ids(settings)[:1] == [deploy_id]
+    running = newest and (fresh or install.deploy_running() is not None)
+    return DeployRun(deploy_id, text, "running" if running else "unknown", None, meta)
 
 
 def recent_deploys(settings: EngineSettings, limit: int = 5) -> list[DeployRun]:
     """The latest deploys the desk started, newest first."""
-    folder = _deploys(settings)
-    ids = sorted((p.stem for p in folder.glob("*.log") if DEPLOY_ID.fullmatch(p.stem)), reverse=True)
-    return [d for d in (read_deploy(settings, i) for i in ids[:limit]) if d is not None]
+    return [d for d in (read_deploy(settings, i) for i in _ids(settings)[:limit]) if d is not None]
 
 
 def deploy_plan(settings: EngineSettings) -> DeployPlan | None:
@@ -626,9 +630,15 @@ def deploy_plan(settings: EngineSettings) -> DeployPlan | None:
 
 
 def start_deploy(settings: EngineSettings, who: Who = "desk") -> DeployRun:
-    """Deploy the source checkout's HEAD: `<source>/home/bin/factory engine upgrade`, exactly what the CLI runs, in a
-    session of its own so it outlives the desk (the upgrade restarts the desk), with its output in
-    `<state>/deploys/<ID>.log`. Refused while a deploy runs; the upgrade also takes the deploy lock itself."""
+    """Deploy the source checkout's HEAD: `<source>/home/bin/factory engine upgrade`, exactly what the CLI runs,
+    detached so it outlives the desk (the upgrade restarts the desk: `install.spawn_detached`), with its output in
+    `<state>/deploys/<ID>.log`. Refused while a deploy runs; the upgrade also takes the deploy lock itself. One at a
+    time in this process, so two requests at once can't both pass the check."""
+    with _starting:
+        return _start_deploy(settings, who)
+
+
+def _start_deploy(settings: EngineSettings, who: Who) -> DeployRun:
     plan = deploy_plan(settings)
     if plan is None:
         raise OpError("no deploy has recorded the source checkout yet: run `factory engine upgrade` in it once")
@@ -645,18 +655,21 @@ def start_deploy(settings: EngineSettings, who: Who = "desk") -> DeployRun:
         fd = os.open(folder / f"{deploy_id}.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:
         raise OpError("a deploy started this very second; reload the engine page to see it") from None
-    with os.fdopen(fd, "w") as log:
-        log.write(f"factory desk: deploying {plan.source} at {plan.head} (branch {plan.branch or 'detached'}) over "
+    log = folder / f"{deploy_id}.log"
+    with os.fdopen(fd, "w") as out:
+        out.write(f"factory desk: deploying {plan.source} at {plan.head} (branch {plan.branch or 'detached'}) over "
                   f"build {plan.build or 'none'} from commit {plan.commit or 'unknown'}\n")
-        log.flush()
-        proc = subprocess.Popen(["sh", "-c", DEPLOY_SCRIPT, "factory-deploy", str(factory)], cwd=checkout,
-                                stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
-                                start_new_session=True, close_fds=True)
-    meta = {"source": plan.source, "head": plan.head, "branch": plan.branch, "build": plan.build,
-            "commit": plan.commit, "pid": proc.pid}
+    meta: dict[str, Any] = {"source": plan.source, "head": plan.head, "branch": plan.branch, "build": plan.build,
+                            "commit": plan.commit, "started": time.time()}
     install.write_atomic(folder / f"{deploy_id}.json", json.dumps(meta) + "\n", mode=0o600)
-    # Reaped by a thread while this process lives; once the desk has restarted, init reaps it.
-    threading.Thread(target=proc.wait, name=f"deploy-{deploy_id}", daemon=True).start()
+    argv = ["sh", "-c", DEPLOY_SCRIPT, "factory-deploy", str(factory)]
+    try:
+        meta["how"] = install.spawn_detached(f"factory-deploy-{deploy_id}", argv, checkout, log)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+        with open(log, "a") as out:
+            out.write(f"\n{EXIT_MARK}127\n")  # it never ran: the page says failed, not running
+        raise OpError(f"the upgrade could not be started: {e}") from None
+    install.write_atomic(folder / f"{deploy_id}.json", json.dumps(meta) + "\n", mode=0o600)
     log_action(settings, who, "deploy", plan.source, plan.commit, plan.head)
     return DeployRun(deploy_id, "", "running", None, meta)
 

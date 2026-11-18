@@ -72,6 +72,23 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await schedules.reconcile(self.client, self.settings), ["updated schedule/demo/qa (0 3 * * *)"])
         self.assertEqual(await schedules.reconcile(self.client, self.settings), [])
 
+    async def test_a_schedule_edited_on_the_server_is_set_back(self):
+        from dataclasses import replace
+
+        from temporalio.client import ScheduleUpdate
+
+        await schedules.reconcile(self.client, self.settings)
+        handle = self.client.get_schedule_handle(self.ref.schedule_id)
+
+        def edit(inp):  # as someone might in Temporal's UI: the digest stays, the time zone changes
+            s = inp.description.schedule
+            return ScheduleUpdate(schedule=replace(s, spec=replace(s.spec, time_zone_name="Asia/Tokyo")))
+
+        await handle.update(edit)
+        self.assertEqual(await schedules.reconcile(self.client, self.settings), ["updated schedule/demo/qa (0 2 * * *)"])
+        self.assertEqual((await handle.describe()).schedule.spec.time_zone_name, "UTC")
+        self.assertEqual(await schedules.reconcile(self.client, self.settings), [])
+
     async def test_schedules_follow_the_engine_time_zone(self):
         self.settings = EngineSettings(repos=(str(self.repo),), time_zone="Asia/Jerusalem")
         await schedules.reconcile(self.client, self.settings)

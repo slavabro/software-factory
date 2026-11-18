@@ -544,7 +544,7 @@ class SafetyTest(unittest.TestCase, Isolated, Served):
 
     def test_a_second_deploy_is_refused_while_one_runs(self):
         self.sign_in()
-        self.source_checkout('sleep 30\n')
+        self.source_checkout('sleep 3\n')
         with install.deploy_lock("upgrade"):
             status, _, body = self.post("deploy", confirmed="yes")
             self.assertEqual(status, 409)
@@ -554,12 +554,46 @@ class SafetyTest(unittest.TestCase, Isolated, Served):
         # one the desk started, before it holds the lock (the fake upgrade never takes it)
         status, headers, _ = self.post("deploy", confirmed="yes")
         self.assertEqual(status, 303)
-        run = ops.read_deploy(self.settings, headers["location"].rpartition("=")[2])
-        assert run is not None
-        self.addCleanup(lambda: os.killpg(run.meta["pid"], 9) if ops._alive(run.meta["pid"]) else None)
         status, _, body = self.post("deploy", confirmed="yes")
         self.assertEqual(status, 409)
         self.assertIn("is running", body)
+
+    def test_two_deploys_at_once_start_one(self):
+        self.sign_in()
+        self.source_checkout('sleep 3\n')
+        results: list[int] = []
+        threads = [threading.Thread(target=lambda: results.append(self.post("deploy", confirmed="yes")[0]))
+                   for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sorted(results), [303, 409, 409, 409])
+
+    def test_a_deploy_that_died_without_its_exit_status_blocks_nothing(self):
+        self.sign_in()
+        self.source_checkout("true\n")
+        folder = self.state / ops.DEPLOYS
+        folder.mkdir(parents=True)
+        # Killed (or the machine went down) an hour ago: no exit line, and its pid may belong to anything by now.
+        (folder / "20261118T080000Z.log").write_text("factory desk: deploying\nbuilding…\n")
+        (folder / "20261118T080000Z.json").write_text(f'{{"started": {time.time() - 3600}, "pid": {os.getpid()}}}')
+        run = ops.read_deploy(self.settings, "20261118T080000Z")
+        assert run is not None
+        self.assertEqual(run.state, "unknown")
+        with install.deploy_lock("upgrade"):  # the newest one, while the lock is held: running
+            self.assertEqual(ops.read_deploy(self.settings, "20261118T080000Z").state, "running")  # type: ignore[union-attr]
+        self.assertIn("<span>Ended without an exit status</span>", self.get("/deploy?id=20261118T080000Z")[2])
+        self.assertEqual(self.post("deploy", confirmed="yes")[0], 303)
+
+    def test_browsers_send_the_origin_the_desk_checks(self):
+        # Under Referrer-Policy no-referrer a browser sends `Origin: null` even on a same-origin form POST, and every
+        # change would be refused; same-origin keeps the real Origin on the desk's own forms (the confirm page's too).
+        self.sign_in()
+        for path in ("/", "/confirm?action=spend-on", "/engine"):
+            self.assertEqual(self.get(path)[1]["referrer-policy"], "same-origin", path)
+        self.assertEqual(self.post("spend-off", origin="null")[0], 403)
+        self.assertEqual(self.post("spend-off")[0], 303)
 
     def test_nothing_to_deploy_when_the_build_is_the_checkouts_head(self):
         self.sign_in()
