@@ -91,7 +91,8 @@ class TeamWorkflow:
                 result = await self._record(inp, outcome, f"run stopped: {summary}", sorted({w.reason for w in wakes}),
                                             timed_out=timed_out)
             except ActivityError:
-                result = TeamResult(outcome=outcome, summary=f"run stopped (not recorded): {summary}")
+                result = TeamResult(outcome=outcome, summary=f"run stopped (not recorded): {summary}",
+                                    reasons=sorted({w.reason for w in wakes}))
         await workflow.wait_condition(workflow.all_handlers_finished)
         if self.pending:  # wakes that arrived during the run: one more run, on fresh history
             workflow.continue_as_new(
@@ -220,4 +221,4 @@ class TeamWorkflow:
             summary=f"record {outcome}",
         )
         self.state = recorded.outcome
-        return TeamResult(outcome=recorded.outcome, summary=summary)
+        return TeamResult(outcome=recorded.outcome, summary=summary, reasons=reasons)

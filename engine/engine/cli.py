@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import subprocess
 import sys
 from datetime import datetime
 from typing import Awaitable, Callable
@@ -15,7 +16,8 @@ from temporalio.client import Client
 
 from factory_runtime.temporal import get_client
 from engine import ops, settings as settings_mod
-from engine.factory import config, status
+from engine.desk import server as desk
+from engine.factory import config, install, status
 from engine.settings import DEPLOYMENT, EngineSettings
 from engine.worker import build_id
 
@@ -63,22 +65,17 @@ async def cmd_reconcile(client: Client, settings: EngineSettings, a: argparse.Na
     return 0
 
 
-FAILED_WORDS = {"failed": "Failed", "terminated": "Terminated", "canceled": "Cancelled", "timed_out": "Timed out"}
-
-
 def run_line(run: ops.RunView) -> str:
     """One run in the shared status words: `✕ Failed`, `▶ Running since …`, never a colour or a raw enum name."""
+    key, word = run.state
     if run.status == "running":
-        return f"{run.workflow_id}: {status.text('running', 'Running since ' + _minutes(run.started))}"
+        return f"{run.workflow_id}: {status.text(key, word + ' since ' + _minutes(run.started))}"
     closed = _minutes(run.closed)
     if run.status == "continued_as_new":
-        return f"{run.workflow_id}: {status.text('continued')} {closed} — with the wakes that arrived during the run"
+        return f"{run.workflow_id}: {status.text(key, word)} {closed} — with the wakes that arrived during the run"
     if run.outcome is not None:
-        return f"{run.workflow_id}: {status.text(run.outcome)} {closed} — {run.summary[:120]}"
-    if run.status == "completed":  # its result could not be read
-        return f"{run.workflow_id}: {status.text('unknown', 'Completed')} {closed} — {(run.failure or '')[:160]}"
-    word = FAILED_WORDS.get(run.status, run.status.replace("_", " ").capitalize())
-    return f"{run.workflow_id}: {status.text('failed', word)} {closed} — {(run.failure or 'no reason recorded')[:160]}"
+        return f"{run.workflow_id}: {status.text(key, word)} {closed} — {run.summary[:120]}"
+    return f"{run.workflow_id}: {status.text(key, word)} {closed} — {(run.failure or 'no reason recorded')[:160]}"
 
 
 def schedule_line(s: ops.ScheduleView) -> str:
@@ -94,6 +91,34 @@ async def cmd_status(client: Client, settings: EngineSettings, a: argparse.Names
         print(run_line(run))
     if not snap.settings.unattended:
         print(f"spend switch: {status.text('paused', 'Off')} — no team starts an agent session (factory engine spend on)")
+    print(desk_line(settings))
+    return 0
+
+
+def desk_line(settings: EngineSettings) -> str:
+    """The desk's address and whether it answers there; never the token (`factory engine desk` prints the link)."""
+    state = desk.probe(settings.desk_port)
+    hint = {"up": "up; `factory engine desk` prints the sign-in link",
+            "not running": "not running (python -m engine.desk serves it)",
+            "port held by something else": "port held by something else (set desk_port in engine.toml)"}[state]
+    return f"desk: {desk.base_url(settings.desk_port)} — {hint}"
+
+
+def cmd_desk(settings: EngineSettings, a: argparse.Namespace) -> int:
+    """The link that signs a browser in to the desk (makes the token the first time); --open opens it."""
+    link = desk.signed_url(settings.desk_port, install.desk_token())
+    if a.open:
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        try:
+            subprocess.run([opener, link], check=True, capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise SystemExit(f"factory engine: could not open the desk with {opener} ({e}); open the link by hand")
+        print(f"opened the desk ({desk.base_url(settings.desk_port)})")
+    else:
+        print(link)
+    state = desk.probe(settings.desk_port)
+    if state != "up":
+        print(f"the desk is {state} on port {settings.desk_port}", file=sys.stderr)
     return 0
 
 
@@ -164,6 +189,8 @@ def parser() -> argparse.ArgumentParser:
     st.add_argument("--recent", type=int, default=10)
     sp = sub.add_parser("spend", help="the spend switch: off stops new agent sessions, a running one finishes")
     sp.add_argument("state", choices=["on", "off"])
+    dk = sub.add_parser("desk", help="print the link that signs a browser in to the Factory Desk")
+    dk.add_argument("--open", action="store_true", help="open it in the browser instead of printing it")
     rp = sub.add_parser("repo", help="add or remove a repo the engine runs teams for")
     rp.add_argument("action", choices=["add", "remove"])
     rp.add_argument("path")
@@ -190,6 +217,8 @@ async def run(argv: list[str]) -> int:
     try:
         if a.command == "spend":  # a file change: works while the server is down
             return cmd_spend(settings, a)
+        if a.command == "desk":  # the token file and a local probe: no server needed
+            return cmd_desk(settings, a)
         client = await get_client(settings.temporal)
         return await COMMANDS[a.command](client, settings, a)
     except ops.OpError as e:

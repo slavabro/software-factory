@@ -16,14 +16,30 @@ from temporalio.exceptions import ApplicationError
 from engine import process, steps
 from engine import settings as settings_mod
 from engine.factory import config, runner
-from engine.models import ResolveInput, RunPaths, StepInput, StepResult, TeamPlan
+from engine.models import ResolveInput, RunPaths, StepInput, StepResult, TeamPlan, TeamRef
+from engine.settings import EngineSettings
 
 NOT_OPTED_IN = steps.NOT_OPTED_IN
 HEARTBEAT_EVERY = 30.0
+RUN_PREFIX = 8  # a run's files and branch carry this much of its run ID
 
 
 def run_env(cfg: Any, paths: RunPaths, run_name: str) -> dict[str, str]:
     return steps.run_env(cfg, paths, run_name)
+
+
+def team_logs(settings: EngineSettings, ref: TeamRef) -> Path:
+    """The team's run logs and digests, `<YYYYMMDD>-<run ID's first RUN_PREFIX characters>.log` / `.report.md`."""
+    return settings.state / "logs" / ref.repo_name / ref.team
+
+
+def run_log(settings: EngineSettings, ref: TeamRef, run_id: str) -> Path | None:
+    """A run's log by its run ID (the desk serves logs this way, never by a path), None when it wrote none."""
+    prefix = run_id[:RUN_PREFIX]
+    if len(prefix) < RUN_PREFIX or not all(c in "0123456789abcdef" for c in prefix):  # a run ID is a UUID
+        return None
+    found = sorted(team_logs(settings, ref).glob(f"*-{prefix}.log"))
+    return found[-1] if found else None
 
 
 def _repo_config(repo: str) -> Any:
@@ -54,9 +70,9 @@ async def resolve_team(inp: ResolveInput) -> TeamPlan:
         team = rcfg.teams().get(inp.ref.team)
         if team is None:
             return TeamPlan(enabled=False, reason=f"no team {inp.ref.team!r} in {cfg.name}'s .factory.toml")
-        suffix = f"{inp.day}-{inp.run_id[:8]}"
-        state = settings_mod.load().state
-        logs = state / "logs" / inp.ref.repo_name / inp.ref.team
+        suffix = f"{inp.day}-{inp.run_id[:RUN_PREFIX]}"
+        settings = settings_mod.load()
+        state, logs = settings.state, team_logs(settings, inp.ref)
         paths = RunPaths(
             worktree=str(state / "worktrees" / inp.ref.repo_name / inp.ref.team / suffix),
             branch=f"factory/{inp.ref.team}/{suffix}",

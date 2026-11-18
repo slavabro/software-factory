@@ -10,6 +10,8 @@ States:
     running · continued                        a team run open now; one that went on as a new run
     active · paused                            a team's schedule
     within · approaching · near · over         a budget against its limit (F-33's states, same keys)
+    stopped · degraded                         the engine as a whole (with running: its health)
+    current · draining · drained               a build: new runs go to it; open runs finish on it; nothing left
     unknown                                    not known (a read failed, a state not seen before)
 """
 
@@ -32,7 +34,10 @@ _ONWARD = '<path d="m15 10 5 5-5 5"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>'
 _PLAY = _CIRCLE + '<path d="m10 8 6 4-6 4Z"/>'
 _CLOCK = _CIRCLE + '<path d="M12 6v6l4 2"/>'
 _PAUSE = _CIRCLE + '<path d="M10 15V9"/><path d="M14 15V9"/>'
-_QUESTION = _CIRCLE + '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>'
+_STOP = _CIRCLE + '<path d="M9 9h6v6H9Z"/>'
+_DOT = _CIRCLE + '<circle cx="12" cy="12" r="3"/>'
+_HOURGLASS = '<path d="M6 2h12"/><path d="M6 22h12"/><path d="M7 2v4l5 6 5-6V2"/><path d="M7 22v-4l5-6 5 6v4"/>'
+_QUESTION =_CIRCLE + '<path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>'
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,11 @@ STATUSES: dict[str, Status] = {s.key: s for s in (
     Status("approaching", "Approaching", "!", ATTENTION, _TRIANGLE),
     Status("near", "Near limit", "!", NEGATIVE, _TRIANGLE),
     Status("over", "Over limit", "✕", NEGATIVE, _CROSS),
+    Status("stopped", "Stopped", "■", NEGATIVE, _STOP),
+    Status("degraded", "Degraded", "!", ATTENTION, _TRIANGLE),
+    Status("current", "Current", "●", INFO, _DOT),
+    Status("draining", "Draining", "⧗", NEUTRAL, _HOURGLASS),
+    Status("drained", "Drained", "○", NEUTRAL, _CIRCLE),
     Status("unknown", "Unknown", "?", NEUTRAL, _QUESTION),
 )}
 
