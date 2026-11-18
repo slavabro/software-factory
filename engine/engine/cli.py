@@ -1,5 +1,6 @@
 """`factory engine …` commands that talk to the engine's Temporal (the standard-library `factory` CLI runs this
-module with the engine's own Python). Plain output, one line per fact."""
+module with the engine's own Python). Argument parsing and plain output, one line per fact; the operations
+themselves are engine/ops.py, which the desk shares."""
 
 from __future__ import annotations
 
@@ -7,121 +8,98 @@ import argparse
 import asyncio
 import json
 import sys
-import uuid
-from pathlib import Path
-from typing import Any
+from datetime import datetime
+from typing import Awaitable, Callable
 
-from temporalio.api.enums.v1 import VersionDrainageStatus, WorkerDeploymentVersionStatus
-from temporalio.api.workflowservice.v1 import (
-    DescribeWorkerDeploymentVersionRequest,
-    SetWorkerDeploymentCurrentVersionRequest,
-)
-from temporalio.client import Client, WorkflowExecutionStatus
-from temporalio.common import WorkerDeploymentVersion
-from temporalio.service import RPCError, RPCStatusCode
+from temporalio.client import Client
 
-from factory_runtime.temporal import get_client, get_run_failure
-from engine import schedules, settings as settings_mod
-from engine.activities.teams import schedule_paused, wake
-from engine.factory import config
-from engine.models import TeamRef, Wake, WakeTeamInput
-from engine.settings import DEPLOYMENT, NAMESPACE, EngineSettings
+from factory_runtime.temporal import get_client
+from engine import ops, settings as settings_mod
+from engine.factory import config, status
+from engine.settings import DEPLOYMENT, EngineSettings
 from engine.worker import build_id
 
-
-def _committed(repo: str) -> tuple[Path, str, Any]:
-    """The repo as its default branch configures it, the same view schedules and runs use (so workflow IDs agree)."""
-    root = Path(repo).expanduser().resolve()
-    name, cfg = schedules.committed_config(root)
-    if cfg is None:
-        raise SystemExit(f"{root} is not opted in (no .factory.toml on its default branch)")
-    return root, name, cfg
+Command = Callable[[Client, EngineSettings, argparse.Namespace], Awaitable[int]]
 
 
-def team_ref(repo: str, team: str) -> TeamRef:
-    root, name, _ = _committed(repo)
-    return TeamRef(repo=str(root), repo_name=name, team=team)
-
-
-def teams_for(repo: str, reason: str) -> list[str]:
-    _, _, cfg = _committed(repo)
-    return sorted(name for name, team in cfg.teams().items() if reason in team.wake_on)
+def _minutes(when: datetime | None) -> str:
+    return when.isoformat(timespec="minutes") if when is not None else ""
 
 
 async def cmd_signal(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
-    if a.reason == "decision" and not a.team:
-        raise SystemExit("a decision goes back to one team: give --team")
-    teams = [a.team] if a.team else teams_for(a.repo, a.reason)
-    if not teams:
-        print(f"no team in {a.repo} wakes on {a.reason}")
-        return 0
     try:
         details = json.loads(a.details) if a.details else {}
         if not isinstance(details, dict) or not all(isinstance(v, str) for v in details.values()):
             raise ValueError
     except ValueError:
         raise SystemExit('--details must be a JSON object of strings, e.g. \'{"run": "123"}\'') from None
-    for team in teams:
-        ref = team_ref(a.repo, team)
-        res = await wake(client, settings, WakeTeamInput(ref=ref, wake=Wake(reason=a.reason, event_id=a.event_id, details=details)))
-        print(f"{ref.workflow_id}: {'woken' if res.woken else 'not woken — ' + res.reason}")
+    woken = await ops.signal(client, settings, a.repo, a.reason, a.event_id, details, a.team)
+    if not woken:
+        print(f"no team in {a.repo} wakes on {a.reason}")
+    for s in woken:
+        print(f"{s.ref.workflow_id}: {'woken' if s.result.woken else 'not woken — ' + s.result.reason}")
     return 0
 
 
 async def cmd_run_now(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
-    ref = team_ref(a.repo, a.team)
-    event = f"manual/{ref.workflow_id}/{uuid.uuid4()}"
-    await wake(client, settings, WakeTeamInput(ref=ref, wake=Wake(reason="manual", event_id=event), bypass_pause=True))
-    print(f"{ref.workflow_id}: woken by hand (runs even while its schedule is paused)")
+    res = await ops.run_now(client, settings, ops.team_ref(a.repo, a.team))
+    print(f"{res.ref.workflow_id}: woken by hand (runs even while its schedule is paused)")
+    if not res.unattended:
+        print("the spend switch is off (factory engine spend on): the run stops before it starts an agent session")
     return 0
 
 
 async def cmd_pause(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
-    ref = team_ref(a.repo, a.team)
-    handle = client.get_schedule_handle(ref.schedule_id)
-    if a.command == "pause":
-        await handle.pause(note=a.note or "paused by hand")
-    else:
-        await handle.unpause(note=a.note or "resumed by hand")
-    print(f"{ref.schedule_id}: {a.command}d")
+    ref = ops.team_ref(a.repo, a.team)
+    act = ops.pause if a.command == "pause" else ops.resume
+    change = await act(client, settings, ref, a.note)
+    print(f"{change.target}: {a.command}d")
     return 0
 
 
 async def cmd_reconcile(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
-    for line in await schedules.reconcile(client, settings):
+    for line in await ops.reconcile(client, settings):
         print(line)
     return 0
 
 
+FAILED_WORDS = {"failed": "Failed", "terminated": "Terminated", "canceled": "Cancelled", "timed_out": "Timed out"}
+
+
+def run_line(run: ops.RunView) -> str:
+    """One run in the shared status words: `✕ Failed`, `▶ Running since …`, never a colour or a raw enum name."""
+    if run.status == "running":
+        return f"{run.workflow_id}: {status.text('running', 'Running since ' + _minutes(run.started))}"
+    closed = _minutes(run.closed)
+    if run.status == "continued_as_new":
+        return f"{run.workflow_id}: {status.text('continued')} {closed} — with the wakes that arrived during the run"
+    if run.outcome is not None:
+        return f"{run.workflow_id}: {status.text(run.outcome)} {closed} — {run.summary[:120]}"
+    if run.status == "completed":  # its result could not be read
+        return f"{run.workflow_id}: {status.text('unknown', 'Completed')} {closed} — {(run.failure or '')[:160]}"
+    word = FAILED_WORDS.get(run.status, run.status.replace("_", " ").capitalize())
+    return f"{run.workflow_id}: {status.text('failed', word)} {closed} — {(run.failure or 'no reason recorded')[:160]}"
+
+
+def schedule_line(s: ops.ScheduleView) -> str:
+    state = status.text("paused", f"Paused ({s.note or 'no note'})") if s.paused else status.text("active")
+    return f"{s.schedule_id}: {state}, next {_minutes(s.next_run) or '—'}"
+
+
 async def cmd_status(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
-    for sid in sorted([s.id async for s in await client.list_schedules() if s.id.startswith(schedules.PREFIX)]):
-        desc = await client.get_schedule_handle(sid).describe()
-        state = desc.schedule.state
-        nxt = desc.info.next_action_times[0].isoformat(timespec="minutes") if desc.info.next_action_times else "—"
-        print(f"{sid}: {'PAUSED (' + (state.note or 'no note') + ')' if state.paused else 'active'}, next {nxt}")
-    async for wf in client.list_workflows('WorkflowType = "TeamWorkflow" AND ExecutionStatus = "Running"'):
-        print(f"{wf.id}: running since {wf.start_time.isoformat(timespec='minutes')}")
-    async for wf in client.list_workflows('WorkflowType = "TeamWorkflow" AND ExecutionStatus != "Running"', limit=a.recent):
-        line = f"{wf.id}: {wf.status.name.lower() if wf.status else '?'} {wf.close_time.isoformat(timespec='minutes') if wf.close_time else ''}"
-        if wf.status == WorkflowExecutionStatus.CONTINUED_AS_NEW:
-            line += " — continued with the wakes that arrived during the run"
-        elif wf.status == WorkflowExecutionStatus.COMPLETED:
-            try:
-                result = await client.get_workflow_handle(wf.id, run_id=wf.run_id).result()
-                line += f" — {result.get('outcome', '?')}: {str(result.get('summary', ''))[:120]}"
-            except Exception as e:  # noqa: BLE001 — status is best effort, per line
-                line += f" — result unreadable ({e})"
-        elif wf.status is not None:
-            line += f" — {await get_run_failure(client, wf.id, wf.run_id, 160)}"
-        print(line)
+    snap = await ops.snapshot(client, settings, recent=a.recent)
+    for s in snap.schedules:
+        print(schedule_line(s))
+    for run in (*snap.open_runs, *snap.recent_runs):
+        print(run_line(run))
+    if not snap.settings.unattended:
+        print(f"spend switch: {status.text('paused', 'Off')} — no team starts an agent session (factory engine spend on)")
     return 0
 
 
 async def cmd_set_current(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
     build = a.build_id or build_id()
-    await client.workflow_service.set_worker_deployment_current_version(
-        SetWorkerDeploymentCurrentVersionRequest(namespace=NAMESPACE, deployment_name=DEPLOYMENT, build_id=build)
-    )
+    await ops.set_current(client, settings, build)
     print(f"{DEPLOYMENT}: current build {build}")
     return 0
 
@@ -129,23 +107,39 @@ async def cmd_set_current(client: Client, settings: EngineSettings, a: argparse.
 async def cmd_drained(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
     """Exit 0 when the build's worker may stop: drained, unknown to the server, or never current and nothing pinned
     to it. Exit 1 while it is current or runs remain pinned to it."""
-    version = WorkerDeploymentVersion(deployment_name=DEPLOYMENT, build_id=a.build_id)
-    try:
-        resp = await client.workflow_service.describe_worker_deployment_version(
-            DescribeWorkerDeploymentVersionRequest(namespace=NAMESPACE, deployment_version=version._to_proto())
-        )
-    except RPCError as e:
-        if e.status == RPCStatusCode.NOT_FOUND:
-            print(f"{DEPLOYMENT} build {a.build_id}: unknown to the server (never ran)")
-            return 0
-        raise
-    info = resp.worker_deployment_version_info
-    status = info.drainage_info.status
-    name = VersionDrainageStatus.Name(status).removeprefix("VERSION_DRAINAGE_STATUS_").lower()
-    current = info.status == WorkerDeploymentVersionStatus.WORKER_DEPLOYMENT_VERSION_STATUS_CURRENT
-    never_routed = status == VersionDrainageStatus.VERSION_DRAINAGE_STATUS_UNSPECIFIED and not info.HasField("current_since_time")
-    print(f"{DEPLOYMENT} build {a.build_id}: {'current' if current else name}{' (never current)' if never_routed else ''}")
-    return 0 if not current and (status == VersionDrainageStatus.VERSION_DRAINAGE_STATUS_DRAINED or never_routed) else 1
+    s = await ops.build_status(client, a.build_id)
+    if not s.known:
+        print(f"{DEPLOYMENT} build {a.build_id}: unknown to the server (never ran)")
+    else:
+        print(f"{DEPLOYMENT} build {a.build_id}: {'current' if s.current else s.drainage}"
+              f"{' (never current)' if s.never_current else ''}")
+    return 0 if s.may_stop else 1
+
+
+async def cmd_repo(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
+    if a.action == "add":
+        res = await ops.add_repo(client, settings, a.path)
+        done = "already one of the engine's repos" if res.unchanged else "added"
+        print(f"{res.entry}: {done} ({res.name})")
+    else:
+        res = await ops.remove_repo(client, settings, a.path)
+        print(f"{res.entry}: removed ({res.name})")
+    for line in res.report:
+        print(line)
+    for run in res.open_runs:
+        print(f"{run.workflow_id}: still running; it finishes, nothing new starts")
+    return 0
+
+
+def cmd_spend(settings: EngineSettings, a: argparse.Namespace) -> int:
+    on = a.state == "on"
+    change = ops.set_unattended(settings, on)
+    was = "" if change.before != change.after else " (it already was)"
+    if on:
+        print(f"spend switch on{was}: teams may start agent sessions")
+    else:
+        print(f"spend switch off{was}: no team starts a new agent session; a session already running finishes")
+    return 0
 
 
 def parser() -> argparse.ArgumentParser:
@@ -168,6 +162,11 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("reconcile", help="make the schedules match every repo's .factory.toml")
     st = sub.add_parser("status", help="schedules, running teams, recent runs")
     st.add_argument("--recent", type=int, default=10)
+    sp = sub.add_parser("spend", help="the spend switch: off stops new agent sessions, a running one finishes")
+    sp.add_argument("state", choices=["on", "off"])
+    rp = sub.add_parser("repo", help="add or remove a repo the engine runs teams for")
+    rp.add_argument("action", choices=["add", "remove"])
+    rp.add_argument("path")
     sub.add_parser("build-id", help="this checkout's Build ID")
     c = sub.add_parser("set-current", help="route new runs to a Build ID")
     c.add_argument("--build-id")
@@ -176,9 +175,9 @@ def parser() -> argparse.ArgumentParser:
     return p
 
 
-COMMANDS = {
+COMMANDS: dict[str, Command] = {
     "signal": cmd_signal, "run-now": cmd_run_now, "pause": cmd_pause, "resume": cmd_pause, "reconcile": cmd_reconcile,
-    "status": cmd_status, "set-current": cmd_set_current, "drained": cmd_drained,
+    "status": cmd_status, "set-current": cmd_set_current, "drained": cmd_drained, "repo": cmd_repo,
 }
 
 
@@ -188,8 +187,13 @@ async def run(argv: list[str]) -> int:
         print(build_id())
         return 0
     settings = settings_mod.load()
-    client = await get_client(settings.temporal)
-    return await COMMANDS[a.command](client, settings, a)
+    try:
+        if a.command == "spend":  # a file change: works while the server is down
+            return cmd_spend(settings, a)
+        client = await get_client(settings.temporal)
+        return await COMMANDS[a.command](client, settings, a)
+    except ops.OpError as e:
+        raise SystemExit(f"factory engine: {e}") from None
 
 
 def main() -> None:

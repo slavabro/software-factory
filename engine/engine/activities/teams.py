@@ -69,6 +69,19 @@ async def wake(client: Client, settings: EngineSettings, inp: WakeTeamInput) -> 
     return WakeTeamResult(woken=True)
 
 
+def team_dir(settings: EngineSettings, ref: TeamRef) -> Path:
+    """The team's own state on this machine: `state.json` (failures in a row) and its notebook."""
+    return settings.state / "teams" / ref.repo_name / ref.team
+
+
+def failures_in_a_row(settings: EngineSettings, ref: TeamRef) -> int:
+    """The team's count of failed runs in a row (0 when it has none recorded or the file can't be read)."""
+    try:
+        return int(json.loads((team_dir(settings, ref) / "state.json").read_text()).get("failures", 0))
+    except (OSError, ValueError, AttributeError, TypeError):
+        return 0
+
+
 def slept_in_budget(marker: Path, budget_minutes: int) -> bool:
     """The machine slept during the attempt that timed out, and was awake for less than the budget: without the
     sleep it would not have timed out. A hang after an early nap is still a failure."""
@@ -83,9 +96,6 @@ class TeamActivities:
     def __init__(self, client: Client, settings: EngineSettings) -> None:
         self.client = client
         self.settings = settings
-
-    def _team_dir(self, ref: TeamRef) -> Path:
-        return self.settings.state / "teams" / ref.repo_name / ref.team
 
     @activity.defn(name="check_budget")
     async def check_budget(self, ref: TeamRef) -> BudgetAnswer:
@@ -102,14 +112,14 @@ class TeamActivities:
         runs don't count. At PAUSE_AFTER_FAILURES the team's schedule is paused, on every attempt (pausing twice is
         harmless), so a pause that failed once is not lost."""
         key = activity_idempotency_key()
-        team_dir = self._team_dir(inp.ref)
+        folder = team_dir(self.settings, inp.ref)
         outcome = inp.outcome
         if inp.timed_out and inp.log and slept_in_budget(slept_marker(inp.log), inp.budget_minutes):
             outcome = "interrupted"
 
         def write() -> tuple[int, bool]:
-            team_dir.mkdir(parents=True, exist_ok=True)
-            state_path = team_dir / "state.json"
+            folder.mkdir(parents=True, exist_ok=True)
+            state_path = folder / "state.json"
             raw = json.loads(state_path.read_text()) if state_path.is_file() else {}
             failures: int = int(raw.get("failures", 0))
             recorded: list[str] = list(raw.get("recorded", []))
@@ -123,7 +133,7 @@ class TeamActivities:
             tmp = state_path.with_suffix(".tmp")
             tmp.write_text(json.dumps({"failures": failures, "recorded": recorded}))
             tmp.replace(state_path)
-            with open(team_dir / "notebook.md", "a") as notebook:
+            with open(folder / "notebook.md", "a") as notebook:
                 notebook.write(
                     f"\n## {inp.run_id[:8]} · {outcome} · woken by {', '.join(inp.reasons) or 'nothing'}\n\n"
                     f"{inp.summary or '(no summary)'}\n"

@@ -35,7 +35,8 @@ engine/                        its own pyproject + lockfile: factory-runtime (..
 ├── engine/workflows/tick.py   ScheduleTick
 ├── engine/activities/         repo.py (resolve, prepare, deliver, clean), agent.py (the session), teams.py (budget, outcome, wake)
 ├── engine/schedules.py        desired schedules from each repo's .factory.toml → create / update / delete
-├── engine/cli.py              signal, run-now, pause, resume, status (what `factory engine …` calls)
+├── engine/ops.py              the engine's reads and actions (snapshot, pause, run now, …), shared with the desk
+├── engine/cli.py              signal, run-now, pause, resume, status (what `factory engine …` calls), on ops.py
 ├── engine/worker.py           the one worker: task queue `factory`, Worker Versioning
 └── tests/                     time-skipping tests, activity tests, replay tests
 ```

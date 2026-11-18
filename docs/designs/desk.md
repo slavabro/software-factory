@@ -45,7 +45,9 @@ onto them, so the desk and the CLI share one owner per action:
 - **One settings writer** in `sfactory/engine.py`. It sits on the stdlib side so install can use it too. It can add or
   remove a repo and set a key, and writes atomically (temp file, then rename). It does not keep comments: the file is
   machine-written, and the reference lives in `engine/engine/settings.py`. `write_settings` goes, and install, the CLI
-  and the desk all call this writer. It adds two keys: `desk_port` (default 8245) and `source` (see Deploy below).
+  and the desk all call this writer. It adds one key, `desk_port` (default 8245), which only a person sets: every
+  build refuses keys it doesn't know, so nothing the factory writes by itself adds a key while older builds still run.
+  Machine state that isn't a setting (`current`, `source`) lives in the share dir, next to the builds.
 - **One action log**: `state/actions.jsonl`, one line per change (time, who: `cli` or `desk`, action, target,
   before → after). Written by `ops`, so the CLI's changes are logged too.
 - **One owner for status words and shapes**: the done / interrupted / failed / skipped / paused / over-limit words, their
@@ -71,15 +73,17 @@ onto them, so the desk and the CLI share one owner per action:
 `factory engine upgrade` snapshots the checkout it runs from. A frozen build is not a checkout, so the desk can't call
 `deploy()` itself. Instead:
 
-- Install and upgrade record **`source`** in `engine.toml`: the checkout they ran from. Every build also records the
-  commit it was made from (a `COMMIT` file written by `snapshot()`).
+- `deploy()` records **`source`** next to `current` in the share dir (`~/.local/share/software-factory/engine/source`)
+  once the new build is current: the main worktree of the checkout it ran from (never a linked worktree such as an
+  agent's). Every build also records the commit it was made from (a `COMMIT` file written by `snapshot()`).
 - The Engine panel shows "running build X from commit A; source checkout `~/Dev/software-factory` at B (branch b)".
   When they differ, it offers **Deploy**. The desk never pulls or switches branches in the checkout: that checkout
   belongs to the principal, and the desk deploys exactly what the CLI would.
 - Deploy runs `<source>/home/bin/factory engine upgrade` as a detached process (its own session) with its output in
   `state/deploys/<time>.log`, then redirects to a page that shows that log. Because the upgrade restarts the desk
   itself, the upgrade must not be the desk's child. A second deploy while one is running is refused, with a lock file
-  shared with the CLI.
+  shared with the CLI (`install`, `upgrade`, `start` and `stop` all take it). The desk reads who holds it without
+  taking it, so asking never fails a real deploy.
 
 ### Safety
 
