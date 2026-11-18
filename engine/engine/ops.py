@@ -18,7 +18,10 @@ from pathlib import Path
 from typing import Any, Literal
 
 from temporalio.api.enums.v1 import VersionDrainageStatus, WorkerDeploymentVersionStatus
+from temporalio.api.enums.v1 import TaskQueueType
+from temporalio.api.taskqueue.v1 import TaskQueue
 from temporalio.api.workflowservice.v1 import (
+    DescribeTaskQueueRequest,
     DescribeWorkerDeploymentVersionRequest,
     SetWorkerDeploymentCurrentVersionRequest,
 )
@@ -30,12 +33,14 @@ from factory_runtime.temporal import get_run_failure
 from engine import schedules
 from engine.activities.teams import failures_in_a_row, wake
 from engine.factory import install
+from engine.factory import status as words
 from engine.models import TeamRef, Wake, WakeTeamInput, WakeTeamResult
-from engine.settings import DEPLOYMENT, NAMESPACE, EngineSettings
+from engine.settings import DEPLOYMENT, NAMESPACE, TASK_QUEUE, EngineSettings
 
 Who = Literal["cli", "desk"]
 ACTIONS_LOG = "actions.jsonl"
 FAILURE_CHARS = 500
+FAILED_WORDS = {"failed": "Failed", "terminated": "Terminated", "canceled": "Cancelled", "timed_out": "Timed out"}
 
 
 class OpError(Exception):
@@ -61,6 +66,8 @@ class TeamView:
     wake_on: tuple[str, ...]
     failures: int  # failed runs in a row (state/teams/<repo>/<team>/state.json)
     scheduled: ScheduleView | None  # its Temporal Schedule, None when it has none (yet)
+    prompt: str = ""  # what its agent session is asked to do (what the team does)
+    budget_minutes: int = 0
 
 
 @dataclass(frozen=True)
@@ -84,6 +91,20 @@ class RunView:
     outcome: str | None = None  # a completed run's outcome: done, failed, interrupted, skipped
     summary: str = ""
     failure: str | None = None  # why it did not complete, or why its result could not be read
+    reasons: tuple[str, ...] = ()  # who woke it (a completed run's result says; older runs and open ones don't)
+
+    @property
+    def state(self) -> tuple[str, str]:
+        """(status key, word) in the shared status words (sfactory/status.py): how the CLI and the desk say it."""
+        if self.status == "running":
+            return "running", words.status("running").word
+        if self.status == "continued_as_new":
+            return "continued", words.status("continued").word
+        if self.outcome is not None:
+            return self.outcome, words.status(self.outcome).word
+        if self.status == "completed":  # its result could not be read
+            return "unknown", "Completed"
+        return "failed", FAILED_WORDS.get(self.status, self.status.replace("_", " ").capitalize())
 
 
 @dataclass(frozen=True)
@@ -226,8 +247,21 @@ def _repo_view(settings: EngineSettings, entry: str, scheduled: dict[str, Schedu
     for team, spec in sorted(cfg.teams().items()):  # type: ignore[attr-defined]
         ref = TeamRef(repo=str(root), repo_name=name, team=team)
         teams.append(TeamView(ref, spec.schedule or "", tuple(spec.wake_on), failures_in_a_row(settings, ref),
-                              scheduled.get(ref.schedule_id)))
+                              scheduled.get(ref.schedule_id), prompt=spec.prompt, budget_minutes=spec.budget_minutes))
     return RepoView(entry, str(root), name, tuple(teams))
+
+
+def find_team(settings: EngineSettings, workflow_id: str) -> TeamView | None:
+    """A team of a configured repo by its ID (`team/<repo>/<team>`), as its default branch configures it; None for
+    any other ID. Local reads only, like `snapshot`: the desk resolves IDs from the client this way, never paths."""
+    repo_name, team = split_id(workflow_id)
+    if not workflow_id.startswith("team/") or not repo_name or not team:
+        return None
+    for entry in settings.repos:
+        view = _repo_view(settings, entry, {})
+        if view.name == repo_name:
+            return next((t for t in view.teams if t.ref.team == team), None)
+    return None
 
 
 # ---- reads --------------------------------------------------------------------------------------------------------
@@ -259,7 +293,8 @@ async def _run_view(client: Client, wf: WorkflowExecution) -> RunView:
     if wf.status == WorkflowExecutionStatus.COMPLETED:
         try:
             result = await client.get_workflow_handle(wf.id, run_id=wf.run_id).result()
-            return replace(base, outcome=str(result.get("outcome", "?")), summary=str(result.get("summary", "")))
+            return replace(base, outcome=str(result.get("outcome", "?")), summary=str(result.get("summary", "")),
+                           reasons=tuple(str(r) for r in result.get("reasons", ())))
         except Exception as e:  # noqa: BLE001 — per run: one unreadable result must not hide the rest
             return replace(base, failure=f"result unreadable ({e})")
     if wf.status in (WorkflowExecutionStatus.RUNNING, WorkflowExecutionStatus.CONTINUED_AS_NEW) or wf.status is None:
@@ -273,9 +308,33 @@ async def open_runs(client: Client, repo_name: str | None = None) -> list[RunVie
     return [r for r in runs if repo_name is None or r.repo_name == repo_name]
 
 
-async def recent_runs(client: Client, limit: int) -> list[RunView]:
+def _quoted(value: str) -> str:
+    """A string literal in a visibility query."""
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+async def recent_runs(client: Client, limit: int, workflow_id: str | None = None) -> list[RunView]:
+    """The latest closed team runs, newest first (of one team with `workflow_id`). Each completed run costs a
+    result read, so callers keep `limit` small."""
+    if limit <= 0:
+        return []
     query = 'WorkflowType = "TeamWorkflow" AND ExecutionStatus != "Running"'
+    if workflow_id is not None:
+        query += f" AND WorkflowId = {_quoted(workflow_id)}"
     return [await _run_view(client, wf) async for wf in client.list_workflows(query, limit=limit)]
+
+
+async def pollers(client: Client) -> dict[str, datetime]:
+    """Each build whose worker polls the task queue now (as the server last saw it) → when it last polled."""
+    resp = await client.workflow_service.describe_task_queue(DescribeTaskQueueRequest(
+        namespace=NAMESPACE, task_queue=TaskQueue(name=TASK_QUEUE), task_queue_type=TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW,
+    ))
+    out: dict[str, datetime] = {}
+    for p in resp.pollers:
+        build = p.deployment_options.build_id or p.worker_version_capabilities.build_id or "unversioned"
+        seen = p.last_access_time.ToDatetime(tzinfo=timezone.utc)
+        out[build] = max(seen, out.get(build, seen))
+    return out
 
 
 async def build_status(client: Client, build: str) -> BuildStatus:

@@ -28,7 +28,7 @@ class EngineInstallTest(unittest.TestCase):
             "CONFIG_DIR": self.tmp / "config", "SHARE": self.tmp / "share", "BUILDS": self.tmp / "share" / "builds",
             "CURRENT": self.tmp / "share" / "current", "ENV_FILE": self.tmp / "config" / "engine.env",
             "SETTINGS": self.tmp / "config" / "engine.toml", "DEPLOY_LOCK": self.tmp / "share" / "deploy.lock",
-            "SOURCE": self.tmp / "share" / "source",
+            "SOURCE": self.tmp / "share" / "source", "DESK_TOKEN": self.tmp / "config" / "desk.token",
         }
         for name, value in patches.items():
             p = mock.patch.object(engine, name, value)
@@ -189,6 +189,29 @@ class EngineInstallTest(unittest.TestCase):
         self.assertEqual(engine.ENV_FILE.read_text(), first)
         self.assertTrue(first.startswith("ENGINE_DB_PASSWORD=") and len(first) > 30)
         self.assertEqual(stat.S_IMODE(engine.ENV_FILE.stat().st_mode), 0o600)
+
+    def test_the_desk_token_is_made_once_and_private(self):
+        token = engine.desk_token()
+        self.assertEqual(engine.desk_token(), token)
+        self.assertGreaterEqual(len(token), 40)
+        self.assertEqual(engine.DESK_TOKEN.parent, engine.CONFIG_DIR)
+        self.assertEqual(stat.S_IMODE(engine.DESK_TOKEN.stat().st_mode), 0o600)
+        engine.DESK_TOKEN.chmod(0o644)
+        engine.DESK_TOKEN.write_text("")  # emptied by hand: a new token, private again
+        fresh = engine.desk_token()
+        self.assertNotEqual(fresh, token)
+        self.assertEqual(stat.S_IMODE(engine.DESK_TOKEN.stat().st_mode), 0o600)
+
+    def test_the_source_head_is_read_with_local_git(self):
+        self.assertIsNone(engine.source_head())  # no deploy recorded one yet
+        repo = self.checkout()
+        engine.record_source(repo)
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+        with mock.patch.object(engine.subprocess, "run", wraps=engine.subprocess.run) as run:
+            self.assertEqual(engine.source_head(), (engine.home_form(repo), head, "main"))
+        self.assertFalse([c for c in run.call_args_list if "fetch" in c.args[0]])
+        git("checkout", "-q", "--detach", cwd=repo)
+        self.assertEqual(engine.source_head(), (engine.home_form(repo), head, None))
 
     def test_a_snapshot_is_the_committed_code_named_by_its_build_id(self):
         repo = self.checkout()

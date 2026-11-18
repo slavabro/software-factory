@@ -98,6 +98,7 @@ class OutcomeResult(BaseModel):
 class TeamResult(BaseModel):
     outcome: Outcome
     summary: str
+    reasons: list[Reason] = Field(default_factory=list)  # who woke the run (runs before this field read as none)
 
 
 class WakeTeamInput(BaseModel):

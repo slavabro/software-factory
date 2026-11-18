@@ -6,7 +6,7 @@ standard-library runner (`plugins/factory/sfactory`), so it runs from the factor
 
 ```sh
 factory engine install --repo ~/Dev/FamilyOffice     # Docker project, this build's worker, schedules
-factory engine status                                # schedules, running teams, recent runs
+factory engine status                                # schedules, running teams, recent runs, the desk's URL
 factory engine run-now --repo ~/Dev/FamilyOffice --team upgrade
 factory engine spend off                             # the spend switch: no new agent session starts
 factory engine repo add ~/Dev/OtherRepo              # needs a .factory.toml on its default branch; reconciles
@@ -30,6 +30,7 @@ its own virtualenv and worker service (`sfactory/engine.py`). For development, a
 | `engine/worker.py` | the worker (task queue `factory`, Worker Versioning, Build ID from the code) |
 | `engine/ops.py` | the reads (`snapshot`) and actions the CLI and the desk share; changes go to `state/actions.jsonl` |
 | `engine/cli.py` | `signal`, `run-now`, `pause`, `resume`, `reconcile`, `status`, `spend`, `repo`, `build-id`, `set-current`, `drained`: parsing and output only |
+| `engine/desk/` | the Factory Desk ([design](../docs/designs/desk.md)), `python -m engine.desk`: `server.py` (Host and token checks, CSP, the Temporal loop), `pages.py` (HTML in the shared status words), `repos.py` (factory pin, CI and factory PRs, `gh` cached) |
 | `engine/settings.py` | `~/.config/software-factory/engine.toml` |
 
 Tests (`cd engine && python -m unittest discover -s tests -t .`): workflows on the time-skipping test server,

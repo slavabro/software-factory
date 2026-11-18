@@ -37,7 +37,8 @@ class Isolated:
         case.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
         for target, name, value in ((install, "SETTINGS", base / "engine.toml"),
-                                    (install, "BUILDS", base / "builds"), (install, "CURRENT", base / "current")):
+                                    (install, "BUILDS", base / "builds"), (install, "CURRENT", base / "current"),
+                                    (install, "DESK_TOKEN", base / "desk.token")):
             patch = mock.patch.object(target, name, value)
             patch.start()
             case.addCleanup(patch.stop)

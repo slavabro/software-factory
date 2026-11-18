@@ -15,7 +15,8 @@ from temporalio.client import Client
 
 from factory_runtime.temporal import get_client
 from engine import ops, settings as settings_mod
-from engine.factory import config, status
+from engine.desk import server as desk
+from engine.factory import config, install, status
 from engine.settings import DEPLOYMENT, EngineSettings
 from engine.worker import build_id
 
@@ -63,22 +64,17 @@ async def cmd_reconcile(client: Client, settings: EngineSettings, a: argparse.Na
     return 0
 
 
-FAILED_WORDS = {"failed": "Failed", "terminated": "Terminated", "canceled": "Cancelled", "timed_out": "Timed out"}
-
-
 def run_line(run: ops.RunView) -> str:
     """One run in the shared status words: `✕ Failed`, `▶ Running since …`, never a colour or a raw enum name."""
+    key, word = run.state
     if run.status == "running":
-        return f"{run.workflow_id}: {status.text('running', 'Running since ' + _minutes(run.started))}"
+        return f"{run.workflow_id}: {status.text(key, word + ' since ' + _minutes(run.started))}"
     closed = _minutes(run.closed)
     if run.status == "continued_as_new":
-        return f"{run.workflow_id}: {status.text('continued')} {closed} — with the wakes that arrived during the run"
+        return f"{run.workflow_id}: {status.text(key, word)} {closed} — with the wakes that arrived during the run"
     if run.outcome is not None:
-        return f"{run.workflow_id}: {status.text(run.outcome)} {closed} — {run.summary[:120]}"
-    if run.status == "completed":  # its result could not be read
-        return f"{run.workflow_id}: {status.text('unknown', 'Completed')} {closed} — {(run.failure or '')[:160]}"
-    word = FAILED_WORDS.get(run.status, run.status.replace("_", " ").capitalize())
-    return f"{run.workflow_id}: {status.text('failed', word)} {closed} — {(run.failure or 'no reason recorded')[:160]}"
+        return f"{run.workflow_id}: {status.text(key, word)} {closed} — {run.summary[:120]}"
+    return f"{run.workflow_id}: {status.text(key, word)} {closed} — {(run.failure or 'no reason recorded')[:160]}"
 
 
 def schedule_line(s: ops.ScheduleView) -> str:
@@ -94,6 +90,8 @@ async def cmd_status(client: Client, settings: EngineSettings, a: argparse.Names
         print(run_line(run))
     if not snap.settings.unattended:
         print(f"spend switch: {status.text('paused', 'Off')} — no team starts an agent session (factory engine spend on)")
+    answering = install.port_taken(settings.desk_port)
+    print(f"desk: {desk.url(settings)}" + ("" if answering else " (not running: python -m engine.desk serves it)"))
     return 0
 
 

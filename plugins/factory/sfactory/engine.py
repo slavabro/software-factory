@@ -44,6 +44,7 @@ CURRENT = SHARE / "current"
 SOURCE = SHARE / "source"  # the checkout the current build was deployed from (`~/…`), the one the desk deploys
 DEPLOY_LOCK = SHARE / "deploy.lock"  # held by whoever deploys, starts or stops: the desk runs upgrade
 ENV_FILE = CONFIG_DIR / "engine.env"
+DESK_TOKEN = CONFIG_DIR / "desk.token"  # the Factory Desk's access token (0600); `factory engine status` prints its URL
 # engine.toml: the one owner of its path. FACTORY_ENGINE_CONFIG names the file (the worker and the engine's CLI get
 # it from here); without it, the file is in CONFIG_DIR. engine/settings.py reads this name, never its own.
 SETTINGS = Path(os.environ.get("FACTORY_ENGINE_CONFIG") or CONFIG_DIR / "engine.toml").expanduser()
@@ -209,6 +210,29 @@ def ensure_env_file() -> None:
         f.write(f"ENGINE_DB_PASSWORD={secrets.token_urlsafe(24)}\n")
 
 
+def desk_token() -> str:
+    """The Factory Desk's token, made once (random, readable only by the user); every desk request proves it."""
+    try:
+        token = DESK_TOKEN.read_text().strip()
+    except FileNotFoundError:
+        token = ""
+    if token:
+        return token
+    DESK_TOKEN.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(DESK_TOKEN, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:  # made meanwhile by another caller (use it), or left empty (fill it)
+        token = DESK_TOKEN.read_text().strip()
+        if token:
+            return token
+        fd = os.open(DESK_TOKEN, os.O_WRONLY | os.O_TRUNC)
+        os.fchmod(fd, 0o600)
+    token = secrets.token_urlsafe(32)
+    with os.fdopen(fd, "w") as f:
+        f.write(token + "\n")
+    return token
+
+
 def compose_file() -> Path:
     """The current build's compose file (frozen with its code); this checkout's before the first build."""
     build = current_build()
@@ -305,6 +329,25 @@ def record_source(checkout: Path = FACTORY) -> None:
 
 def recorded_source() -> str | None:
     return (SOURCE.read_text().strip() or None) if SOURCE.is_file() else None
+
+
+def source_head() -> tuple[str, str | None, str | None] | None:
+    """(the source checkout as recorded, its HEAD commit, its branch), read with local git only (never a fetch);
+    None before a deploy recorded one. Commit or branch is None when git can't tell (a moved checkout, a detached
+    HEAD)."""
+    source = recorded_source()
+    if source is None:
+        return None
+    path = Path(source).expanduser()
+
+    def git(*args: str) -> str | None:
+        try:
+            out = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return (out.stdout.strip() or None) if out.returncode == 0 else None
+
+    return source, git("rev-parse", "--verify", "HEAD^{commit}"), git("symbolic-ref", "--short", "-q", "HEAD")
 
 
 def build_commit(build: str) -> str | None:

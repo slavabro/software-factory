@@ -37,6 +37,7 @@ engine/                        its own pyproject + lockfile: factory-runtime (..
 ├── engine/schedules.py        desired schedules from each repo's .factory.toml → create / update / delete
 ├── engine/ops.py              the engine's reads and actions (snapshot, pause, run now, …), shared with the desk
 ├── engine/cli.py              signal, run-now, pause, resume, status (what `factory engine …` calls), on ops.py
+├── engine/desk/               the Factory Desk (docs/designs/desk.md): server.py (safety, reads), pages.py, repos.py (gh)
 ├── engine/worker.py           the one worker: task queue `factory`, Worker Versioning
 └── tests/                     time-skipping tests, activity tests, replay tests
 ```
