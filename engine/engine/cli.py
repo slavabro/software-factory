@@ -99,7 +99,7 @@ def desk_line(settings: EngineSettings) -> str:
     """The desk's address and whether it answers there; never the token (`factory engine desk` prints the link)."""
     state = desk.probe(settings.desk_port)
     hint = {"up": "up; `factory engine desk` prints the sign-in link",
-            "not running": "not running (python -m engine.desk serves it)",
+            "not running": "not running (`factory engine start` starts its service)",
             "port held by something else": "port held by something else (set desk_port in engine.toml)"}[state]
     return f"desk: {desk.base_url(settings.desk_port)} — {hint}"
 

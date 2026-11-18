@@ -32,10 +32,21 @@ class EngineInstallTest(unittest.TestCase):
             "SETTINGS": self.tmp / "config" / "engine.toml", "DEPLOY_LOCK": self.tmp / "share" / "deploy.lock",
             "SOURCE": self.tmp / "share" / "source", "DESK_TOKEN": self.tmp / "config" / "desk.token",
         }
+        real_run = engine._run
+
+        def no_services(cmd, **kw):  # this machine's launchd and systemd are never touched (tests mock them)
+            if cmd[0] in ("launchctl", "systemctl", "loginctl"):
+                raise AssertionError(f"a test reached the service manager: {cmd}")
+            return real_run(cmd, **kw)
+
+        patches["_run"] = no_services
         for name, value in patches.items():
             p = mock.patch.object(engine, name, value)
             p.start()
             self.addCleanup(p.stop)
+        env = mock.patch.dict(os.environ, {"FACTORY_ENGINE_STATE": str(self.tmp / "state")})
+        env.start()
+        self.addCleanup(env.stop)
 
     def checkout(self) -> Path:
         repo = self.tmp / "factory"
@@ -137,10 +148,111 @@ class EngineInstallTest(unittest.TestCase):
              mock.patch.object(engine, "ensure_venv", return_value=self.tmp / "py"), \
              mock.patch.object(engine, "_service_present", return_value=True), \
              mock.patch.object(engine, "current_build", return_value="b1"), \
-             mock.patch.object(engine, "engine_cli", cli), mock.patch.object(engine, "retire", return_value=[]):
+             mock.patch.object(engine, "engine_cli", cli), mock.patch.object(engine, "retire", return_value=[]), \
+             mock.patch.object(engine, "start_desk", return_value=None):
             engine.deploy()
         self.assertEqual(order[0], ("set-current", None))  # not yet: the build is not current
         self.assertEqual(engine.recorded_source(), engine.home_form(engine.main_worktree(engine.FACTORY)))
+
+    def test_a_deploy_restarts_the_desk_on_the_new_build_before_it_retires_any(self):
+        order = []
+
+        def cli(python, *args, capture=False):
+            order.append(args[0])
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with mock.patch.object(engine, "snapshot", return_value=("b2", self.tmp / "b2")), \
+             mock.patch.object(engine, "ensure_venv", return_value=self.tmp / "py"), \
+             mock.patch.object(engine, "_service_present", return_value=True), \
+             mock.patch.object(engine, "current_build", return_value="b1"), \
+             mock.patch.object(engine, "start_worker", return_value="launchd w"), \
+             mock.patch.object(engine, "engine_cli", cli), \
+             mock.patch.object(engine, "start_desk", lambda build: order.append(f"desk on {build}") or "launchd d"), \
+             mock.patch.object(engine, "retire", lambda python, keep: order.append("retire") or []):
+            out = engine.deploy()
+        self.assertEqual(order, ["set-current", "desk on b2", "retire", "reconcile"])
+        self.assertIn("desk: launchd d", out)
+        self.assertNotIn("", out)  # reconcile said nothing (nothing changed): no empty line
+
+    def test_the_desk_service_runs_the_current_builds_desk_with_the_workers_path(self):
+        build_dir = Path("/b/my builds/abc")
+        spec = engine.desk_service(build_dir, build_dir / ".venv/bin/python")
+        self.assertEqual(spec["Label"], f"{engine.LABEL}.desk")
+        self.assertEqual(spec["Label"], engine.DESK_LABEL)
+        self.assertEqual(spec["ProgramArguments"], ["/b/my builds/abc/.venv/bin/python", "-m", "engine.desk"])
+        self.assertEqual(spec["EnvironmentVariables"],
+                         engine.worker_service("abc", build_dir, build_dir / ".venv/bin/python")["EnvironmentVariables"])
+        self.assertEqual(spec["EnvironmentVariables"]["PATH"], os.environ["PATH"])  # gh is found
+        self.assertEqual(spec["EnvironmentVariables"]["FACTORY_ENGINE_STATE"], str(self.tmp / "state"))
+        self.assertTrue(spec["KeepAlive"])  # restarted when it crashes
+        self.assertEqual(spec["StandardOutPath"], str(self.tmp / "state" / "desk.log"))
+        unit = engine.desk_unit(spec)
+        self.assertIn('ExecStart="/b/my builds/abc/.venv/bin/python" "-m" "engine.desk"', unit)
+        self.assertIn("Restart=always", unit)
+        # Only the desk is signalled: the upgrade it started (same control group) restarts it and must live on.
+        self.assertIn("KillMode=process", unit)
+        self.assertIn(f"StandardOutput=append:{self.tmp / 'state' / 'desk.log'}", unit)
+
+    def services(self, platform: str) -> list[list[str]]:
+        """Service-manager calls recorded, not made; the plist and unit files in the temp dir."""
+        calls: list[list[str]] = []
+
+        def run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "", "")  # every service loaded and running
+
+        for name, value in (("_run", run), ("_plist_for", lambda label: self.tmp / "agents" / f"{label}.plist"),
+                            ("_unit_for", lambda label: self.tmp / "units" / f"{label}.service")):
+            p = mock.patch.object(engine, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(engine.sys, "platform", platform)
+        p.start()
+        self.addCleanup(p.stop)
+        w = mock.patch.object(engine.shutil, "which", lambda name: f"/usr/bin/{name}")
+        w.start()
+        self.addCleanup(w.stop)
+        return calls
+
+    def test_the_desk_restarts_only_when_its_service_changes(self):
+        for platform in ("darwin", "linux"):
+            with self.subTest(platform):
+                calls = self.services(platform)
+                self.assertIsNotNone(engine.start_desk("b1"))
+                restart = ["bootstrap"] if platform == "darwin" else ["restart"]
+                self.assertTrue(any(c[1:2] == restart or c[2:3] == restart for c in calls), calls)
+                calls.clear()
+                self.assertIsNone(engine.start_desk("b1"))  # already runs exactly this: left alone
+                self.assertFalse([c for c in calls if "bootstrap" in c or "restart" in c])
+                self.assertIsNotNone(engine.start_desk("b2"))  # a new build: restarted onto it
+                self.assertTrue(any("bootstrap" in c or "restart" in c for c in calls))
+                engine.stop_desk()
+                self.assertFalse((self.tmp / "agents" / f"{engine.DESK_LABEL}.plist").exists())
+                self.assertFalse((self.tmp / "units" / f"{engine.DESK_LABEL}.service").exists())
+
+    def test_the_desk_is_never_taken_for_a_worker(self):
+        calls = self.services("darwin")
+        for build in ("b1", "b2", "desk"):  # a stray directory named like the desk is not a build
+            (engine.BUILDS / build).mkdir(parents=True)
+        self.assertEqual(engine.installed_builds(), ["b1", "b2"])
+        with self.assertRaises(ValueError):
+            engine.service_label("desk")
+        drained = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(engine, "engine_cli", return_value=drained):
+            self.assertEqual(engine.retire(self.tmp / "py", keep="b2"), ["retired build b1 (drained)"])
+        with mock.patch.object(engine, "compose"):
+            engine.main(["stop"])
+        workers = [c for c in calls if c[:2] == ["launchctl", "bootout"] and not c[2].endswith(".desk")]
+        self.assertEqual([c[2].rpartition("/")[2] for c in workers],
+                         [f"{engine.LABEL}.b1", f"{engine.LABEL}.b2"])
+        self.assertTrue([c for c in calls if c[:2] == ["launchctl", "bootout"] and c[2].endswith("/" + engine.DESK_LABEL)])
+
+    def test_start_starts_the_desk_on_the_current_build(self):
+        engine.SHARE.mkdir(parents=True)
+        engine.CURRENT.write_text("b1")
+        with mock.patch.object(engine, "server_up"), mock.patch.object(engine, "start_desk") as desk:
+            engine.main(["start"])
+        desk.assert_called_once_with("b1")
 
     def test_the_source_is_the_main_worktree_never_a_linked_one(self):
         repo = self.checkout()

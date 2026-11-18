@@ -64,7 +64,13 @@ onto them, so the desk and the CLI share one owner per action:
 - **Its own service**, `com.software-factory.engine.desk` (launchd / systemd user unit), one label that always runs the
   `current` build. `deploy()` restarts it on the new build right after set-current and before `retire()`, so a build
   is never deleted from under it. `start`, `stop` and `status` include it; the worker loops (`installed_builds`,
-  `stop_worker`) skip it. It gets the worker's PATH so `gh` is found.
+  `stop_worker`) skip it. It gets the worker's PATH so `gh` is found, restarts when it crashes, and logs to
+  `desk.log` in the state dir. It is restarted only when its service file would change (a new build, a new PATH).
+  Its systemd unit uses `KillMode=process`, not the worker's `mixed`: the upgrade the desk starts is in the desk's
+  control group (its own session does not leave it), and with `mixed` restarting the desk would kill that upgrade.
+  Under launchd its own session already keeps it out of the desk's process group, which is what launchd stops.
+  Under systemd without a desktop session, `gh`'s keyring may be locked: the desk then shows CI as unknown with the
+  reason.
 - **Reads**: Temporal live (cheap and local); `engine.toml`, notebooks and logs from disk; `gh` (CI, PRs) cached per
   repo for 10 minutes. When a `gh` read fails, the page keeps the last value with its age, or shows "CI: unknown"
   plus the reason, and never fails the page.

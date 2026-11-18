@@ -10,8 +10,10 @@ import http.client
 import http.server
 import io
 import os
+import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -783,6 +785,81 @@ class DeskServerTest(unittest.IsolatedAsyncioTestCase, Isolated, Served):
         self.assertIn("an odd repo&#x27;s notes", notebook)
         team_page = await self.page(pages.team_url(team_id))
         self.assertIn("odd name+1 &amp; co · qa", team_page)
+
+
+class DeskRestartTest(unittest.TestCase, Served):
+    """The desk as its service runs it (`python -m engine.desk`, a process group of its own, as a launchd job is),
+    killed and started again while the upgrade it started runs, as the upgrade itself does to it."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name)
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            self.port = s.getsockname()[1]
+        config, share = base / "config", base / "share"
+        config.mkdir()
+        (config / "engine.toml").write_text(f'repos = []\ntime_zone = "UTC"\nserver_port = 1\ndesk_port = {self.port}\n')
+        self.env = dict(os.environ, FACTORY_ENGINE_CONFIG_DIR=str(config), FACTORY_ENGINE_HOME=str(share),
+                        FACTORY_ENGINE_CONFIG=str(config / "engine.toml"), FACTORY_ENGINE_STATE=str(base / "state"))
+        for name, value in (("DESK_TOKEN", config / "desk.token"), ("SOURCE", share / "source")):
+            patch = mock.patch.object(install, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        # The source checkout: its `factory engine upgrade` outlasts the desk's restart, then ends well.
+        checkout = base / "factory"
+        factory = checkout / "home" / "bin" / "factory"
+        factory.parent.mkdir(parents=True)
+        factory.write_text('#!/bin/sh\necho "upgrade started"\nsleep 3\necho "still here after the restart"\n')
+        factory.chmod(0o755)
+        git("init", "-q", "-b", "main", str(checkout), cwd=base)
+        for key, value in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+            git("config", key, value, cwd=checkout)
+        git("add", ".", cwd=checkout)
+        git("commit", "-qm", "init", cwd=checkout)
+        (share / "builds" / "b1").mkdir(parents=True)
+        (share / "builds" / "b1" / "COMMIT").write_text("0ld\n")
+        (share / "current").write_text("b1")
+        (share / "source").write_text(f"{checkout}\n")
+        self.cookie = ""
+
+    def start_desk(self) -> subprocess.Popen[bytes]:
+        desk = subprocess.Popen([sys.executable, "-m", "engine.desk"], env=self.env, start_new_session=True,
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                cwd=Path(__file__).resolve().parents[1])
+        self.addCleanup(lambda: (desk.poll() is None and os.killpg(desk.pid, signal.SIGKILL), desk.wait()))
+        for _ in range(200):
+            if desk_server.probe(self.port, timeout=0.5) == "up":
+                return desk
+            time.sleep(0.05)
+        self.fail("the desk never answered")
+
+    def test_the_upgrade_the_desk_started_outlives_its_restart_and_its_log_shows_after(self):
+        self.assertIsNone(install.read_desk_token())
+        first = self.start_desk()
+        self.assertIsNotNone(install.read_desk_token())  # made at the desk's startup
+        self.sign_in()
+        status, headers, body = self.post("deploy", confirmed="yes")
+        self.assertEqual(status, 303, body)
+        location = headers["location"]
+        self.assertIn("upgrade started", self.deploy_text(location, "upgrade started"))
+
+        os.killpg(first.pid, signal.SIGTERM)  # what launchd does to the desk's job when the upgrade restarts it
+        first.wait(10)
+        self.assertNotEqual(desk_server.probe(self.port), "up")
+        self.start_desk()
+        page = self.deploy_text(location, "<span>Deployed</span>")  # the same cookie: the token did not change
+        self.assertIn("still here after the restart", page)
+        self.assertIn(f"{ops.EXIT_MARK}0", page)
+
+    def deploy_text(self, location: str, until: str) -> str:
+        for _ in range(150):
+            status, _, body = self.get(location)
+            if status == 200 and until in body:
+                return body
+            time.sleep(0.1)
+        self.fail(f"the deploy page never said {until}")
 
 
 if __name__ == "__main__":

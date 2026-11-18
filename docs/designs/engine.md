@@ -19,6 +19,7 @@ history. The factory changes a product only through pull requests; it never talk
 | Temporal UI 2.57 | same project | host port 8243 → container 8080 |
 | Setup (one-shot) | same project, `temporalio/admin-tools` | creates namespace `factory` (retention 30 days) and the search attributes `FactoryRepo`, `FactoryTeam` (Keyword) |
 | Worker | host process, launchd (macOS) / systemd user service (Linux) | needs git, `gh`, agent CLIs, Orca on the host |
+| Factory Desk | host process, service `com.software-factory.engine.desk`, on the current build | 127.0.0.1:8245 ([desk.md](desk.md)); log `~/.local/state/software-factory/desk.log` |
 
 Not `temporal server start-dev`: it keeps no history, and a product's dev script may stop every `start-dev` on the
 machine (FamilyOffice's `start_all.sh` does). Only host ports change, never the container's; ports and versions are
@@ -159,7 +160,8 @@ so changing workflow code never breaks a run in flight and needs no patching.
   worker once the server reports it drained (nothing pinned to it still open; the server re-checks every few
   minutes). Runs are bounded by their budget, so an old worker is retired at the first upgrade after its longest
   run (budget + 30 min) ends. This is the rainbow deployment Worker Versioning requires (rolling
-  replacement isn't supported).
+  replacement isn't supported). Right after the new build is Current, and before any old build is retired, the
+  desk's service is restarted onto it, so no build is deleted from under the desk.
 - **First install** sets the first version Current; without that, no workflow tasks reach a versioned worker.
 - **Replay tests** in CI replay each workflow's history on the code that produced it, which catches workflow code
   that isn't deterministic. Old histories never meet new code: they are pinned to their own build.

@@ -15,7 +15,9 @@ factory engine upgrade                               # deploy a new build; retir
 ```
 
 Each build is a frozen copy of the committed code under `~/.local/share/software-factory/engine/builds/<build>` with
-its own virtualenv and worker service (`sfactory/engine.py`). For development, a virtualenv with
+its own virtualenv and worker service (`sfactory/engine.py`). The Factory Desk is one more service,
+`com.software-factory.engine.desk`, always on the current build (log `~/.local/state/software-factory/desk.log`):
+`install` and `upgrade` (re)start it, `start` and `stop` include it. For development, a virtualenv with
 `pip install -r engine/requirements.lock -e runtime -e engine` runs the tests.
 
 | Module | Holds |
