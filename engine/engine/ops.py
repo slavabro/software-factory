@@ -5,13 +5,21 @@ is an `OpError` with the reason in words.
 Reads (`snapshot`) never run `git fetch`: team lists come from schedule IDs and each repo's already-fetched
 origin/<default>. Actions fetch where they need the current config (reconcile, add a repo, resolve a team by path).
 Every change is appended to `<state>/actions.jsonl`: time, who (`cli` or `desk`), action, target, before, after.
+Git and file work inside an async action runs in a thread, so the desk's one event loop keeps serving pages.
+
+A deploy is the CLI's own `factory engine upgrade` run from the source checkout; `start_deploy` starts it for the
+desk (a build is frozen code, not a checkout, so the desk can't deploy in-process).
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 import subprocess
+import threading
+import time
 import uuid
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
@@ -455,7 +463,7 @@ async def signal(client: Client, settings: EngineSettings, repo: str, reason: st
 
 async def reconcile(client: Client, settings: EngineSettings, who: Who = "cli") -> list[str]:
     report = await schedules.reconcile(client, settings)
-    changed = [line for line in report if not line.startswith("updated ")]  # an update to the same spec is no change
+    changed = [line for line in report if line.startswith(("created ", "updated ", "deleted "))]  # unchanged: not listed
     if changed:
         log_action(settings, who, "reconcile", "schedules", None, changed)
     return report
@@ -482,14 +490,22 @@ def _git_root(path: Path) -> Path | None:
     return Path(out.stdout.strip()).resolve() if out.returncode == 0 else None
 
 
-async def add_repo(client: Client, settings: EngineSettings, path: str, who: Who = "cli") -> RepoChange:
-    """Add a repo whose default branch has a .factory.toml, then reconcile (its new schedules start paused)."""
+def _checked_add(path: str) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    if not (path.startswith("~") or Path(path).is_absolute()):
+        raise OpError(f"{path}: give the repo's absolute path or a ~/… path (a relative path depends on the directory "
+                      "the command or the desk happens to run in)")
     root = Path(path).expanduser().resolve()
     if not root.is_dir() or _git_root(root) != root:
         raise OpError(f"{root} is not the top of a git checkout")
     _, name, _ = _committed(str(root), fetch=True)
-    entry = install.repo_entry(path)
     before, after = install.add_repos([path])
+    return install.repo_entry(path), name, before, after
+
+
+async def add_repo(client: Client, settings: EngineSettings, path: str, who: Who = "cli") -> RepoChange:
+    """Add a repo whose default branch has a .factory.toml, then reconcile (its new schedules start paused)."""
+    # git and the settings file in a thread: the desk's event loop serves other pages meanwhile
+    entry, name, before, after = await asyncio.to_thread(_checked_add, path)
     report = await reconcile(client, replace(settings, repos=tuple(after.get("repos", ()))), who)
     change = log_action(settings, who, "add-repo", entry, before.get("repos", []), after.get("repos", []))
     return RepoChange(change, entry, name, report, unchanged=before == after)
@@ -497,18 +513,164 @@ async def add_repo(client: Client, settings: EngineSettings, path: str, who: Who
 
 async def remove_repo(client: Client, settings: EngineSettings, path: str, who: Who = "cli") -> RepoChange:
     """Remove a repo, then reconcile, which deletes its schedules. Its open runs finish; nothing new starts."""
-    root = Path(path).expanduser().resolve()
-    try:
-        name = schedules.committed_config(root)[0]
-    except Exception:  # noqa: BLE001 — a deleted or broken checkout can still be removed
-        name = root.name
-    try:
-        before, after = install.remove_repo(path)
-    except KeyError as e:
-        raise OpError(e.args[0]) from e
+    def checked() -> tuple[str, dict[str, Any], dict[str, Any]]:
+        root = Path(path).expanduser().resolve()
+        try:
+            name = schedules.committed_config(root)[0]
+        except Exception:  # noqa: BLE001 — a deleted or broken checkout can still be removed
+            name = root.name
+        try:
+            before, after = install.remove_repo(path)
+        except KeyError as e:
+            raise OpError(e.args[0]) from e
+        return name, before, after
+
+    name, before, after = await asyncio.to_thread(checked)
     entry = next(r for r in before.get("repos", []) if r not in after.get("repos", []))
     report = await reconcile(client, replace(settings, repos=tuple(after.get("repos", ()))), who)
     change = log_action(settings, who, "remove-repo", entry, before.get("repos", []), after.get("repos", []))
     return RepoChange(change, entry, name, report, tuple(await open_runs(client, name)))
+
+
+# ---- deploy (the desk's: `factory engine upgrade` from the source checkout) ---------------------------------------
+
+DEPLOYS = "deploys"  # <state>/deploys/<ID>.log, and <ID>.json for what it was started with
+DEPLOY_ID = re.compile(r"\d{8}T\d{6}Z")  # its UTC start time; the desk serves a deploy's log by this, never a path
+EXIT_MARK = "factory desk: the upgrade exited with "  # the log's last line once the upgrade has ended
+# The upgrade runs under sh so its log ends with its exit status although nothing waits for it (the desk restarts).
+SPAWN_GRACE = 60  # seconds a just-started deploy counts as running before its upgrade holds the deploy lock
+_starting = threading.Lock()  # one start_deploy at a time in this process (the desk's request threads)
+DEPLOY_SCRIPT = f'"$1" engine upgrade; code=$?; printf "\\n{EXIT_MARK}%s\\n" "$code"; exit "$code"'
+
+
+@dataclass(frozen=True)
+class DeployPlan:
+    """What a deploy from the desk would do: the source checkout's HEAD over the running build's commit."""
+
+    source: str  # the checkout as recorded (`~/…`)
+    head: str | None  # its HEAD; None when git can't tell
+    branch: str | None
+    build: str | None  # the running (current) build
+    commit: str | None  # the commit it was made from
+    busy: str | None  # a deploy, start or stop running now, in words
+
+    @property
+    def refusal(self) -> str:
+        """Why it can't deploy now ("" when it can)."""
+        if self.busy:
+            return f"{self.busy} is running; deploy when it has finished"
+        if self.head is None:
+            return f"git can't read the source checkout {self.source}'s HEAD"
+        if self.head == self.commit:
+            return "the running build is already the source checkout's HEAD"
+        return ""
+
+
+@dataclass(frozen=True)
+class DeployRun:
+    deploy_id: str
+    log: str
+    state: Literal["running", "done", "failed", "unknown"]
+    exit_code: int | None
+    meta: dict[str, Any]  # source, head, branch, build, commit, when (epoch s) and how it was started
+
+
+def _deploys(settings: EngineSettings) -> Path:
+    return settings.state / DEPLOYS
+
+
+def _ids(settings: EngineSettings) -> list[str]:
+    """The desk's deploys, newest first."""
+    return sorted((p.stem for p in _deploys(settings).glob("*.log") if DEPLOY_ID.fullmatch(p.stem)), reverse=True)
+
+
+def read_deploy(settings: EngineSettings, deploy_id: str) -> DeployRun | None:
+    """A deploy the desk started, by its ID (None for anything that isn't one): its log and whether it has ended."""
+    if DEPLOY_ID.fullmatch(deploy_id) is None:
+        return None
+    try:
+        text = (_deploys(settings) / f"{deploy_id}.log").read_text(errors="replace")
+    except OSError:
+        return None
+    try:
+        meta = json.loads((_deploys(settings) / f"{deploy_id}.json").read_text())
+    except (OSError, ValueError):
+        meta = {}
+    meta = meta if isinstance(meta, dict) else {}
+    last = text.rstrip("\n").rpartition("\n")[2]
+    code = last[len(EXIT_MARK):].strip() if last.startswith(EXIT_MARK) else ""
+    if code.isdigit():
+        return DeployRun(deploy_id, text, "done" if code == "0" else "failed", int(code), meta)
+    # No exit status yet. Running is decided by the deploy lock (never a stored pid, which a reboot can hand to
+    # another process): the newest deploy runs while the lock is held, or in its first SPAWN_GRACE seconds, before
+    # the upgrade has taken the lock. Anything else ended without saying how (killed, or the machine went down).
+    started = meta.get("started")
+    fresh = isinstance(started, (int, float)) and 0 <= time.time() - started < SPAWN_GRACE
+    newest = _ids(settings)[:1] == [deploy_id]
+    running = newest and (fresh or install.deploy_running() is not None)
+    return DeployRun(deploy_id, text, "running" if running else "unknown", None, meta)
+
+
+def recent_deploys(settings: EngineSettings, limit: int = 5) -> list[DeployRun]:
+    """The latest deploys the desk started, newest first."""
+    return [d for d in (read_deploy(settings, i) for i in _ids(settings)[:limit]) if d is not None]
+
+
+def deploy_plan(settings: EngineSettings) -> DeployPlan | None:
+    """None before a deploy recorded the source checkout. Local reads only (git without a fetch, files)."""
+    source = install.source_head()
+    if source is None:
+        return None
+    build = install.current_build()
+    busy = install.deploy_running()
+    if busy is None:  # one the desk started that does not hold the lock yet
+        busy = next((f"the deploy started {d.deploy_id}" for d in recent_deploys(settings, 1) if d.state == "running"),
+                    None)
+    return DeployPlan(source[0], source[1], source[2], build, install.build_commit(build) if build else None, busy)
+
+
+def start_deploy(settings: EngineSettings, who: Who = "desk") -> DeployRun:
+    """Deploy the source checkout's HEAD: `<source>/home/bin/factory engine upgrade`, exactly what the CLI runs,
+    detached so it outlives the desk (the upgrade restarts the desk: `install.spawn_detached`), with its output in
+    `<state>/deploys/<ID>.log`. Refused while a deploy runs; the upgrade also takes the deploy lock itself. One at a
+    time in this process, so two requests at once can't both pass the check."""
+    with _starting:
+        return _start_deploy(settings, who)
+
+
+def _start_deploy(settings: EngineSettings, who: Who) -> DeployRun:
+    plan = deploy_plan(settings)
+    if plan is None:
+        raise OpError("no deploy has recorded the source checkout yet: run `factory engine upgrade` in it once")
+    if plan.refusal:
+        raise OpError(plan.refusal)
+    checkout = Path(plan.source).expanduser()
+    factory = checkout / "home" / "bin" / "factory"
+    if not os.access(factory, os.X_OK):
+        raise OpError(f"{factory} is missing or not executable")
+    folder = _deploys(settings)
+    folder.mkdir(parents=True, exist_ok=True)
+    deploy_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    try:
+        fd = os.open(folder / f"{deploy_id}.log", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        raise OpError("a deploy started this very second; reload the engine page to see it") from None
+    log = folder / f"{deploy_id}.log"
+    with os.fdopen(fd, "w") as out:
+        out.write(f"factory desk: deploying {plan.source} at {plan.head} (branch {plan.branch or 'detached'}) over "
+                  f"build {plan.build or 'none'} from commit {plan.commit or 'unknown'}\n")
+    meta: dict[str, Any] = {"source": plan.source, "head": plan.head, "branch": plan.branch, "build": plan.build,
+                            "commit": plan.commit, "started": time.time()}
+    install.write_atomic(folder / f"{deploy_id}.json", json.dumps(meta) + "\n", mode=0o600)
+    argv = ["sh", "-c", DEPLOY_SCRIPT, "factory-deploy", str(factory)]
+    try:
+        meta["how"] = install.spawn_detached(f"factory-deploy-{deploy_id}", argv, checkout, log)
+    except (OSError, RuntimeError, subprocess.SubprocessError) as e:
+        with open(log, "a") as out:
+            out.write(f"\n{EXIT_MARK}127\n")  # it never ran: the page says failed, not running
+        raise OpError(f"the upgrade could not be started: {e}") from None
+    install.write_atomic(folder / f"{deploy_id}.json", json.dumps(meta) + "\n", mode=0o600)
+    log_action(settings, who, "deploy", plan.source, plan.commit, plan.head)
+    return DeployRun(deploy_id, "", "running", None, meta)
 
 

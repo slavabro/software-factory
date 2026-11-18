@@ -57,13 +57,23 @@ onto them, so the desk and the CLI share one owner per action:
 
 - **`engine/engine/desk/`**: a standard-library `ThreadingHTTPServer` that renders HTML on the server, with one
   asyncio loop in a background thread holding the Temporal client (requests use `run_coroutine_threadsafe`). There is
-  no JSON API and no JS framework. Changes are HTML forms posted and then redirected (post-redirect-get), and the
-  money-spending ones confirm once. No new dependency: the engine's lockfile is part of the Build ID, so a web stack
+  no JSON API and no JS framework. Changes are HTML forms posted to `/act/<action>` and then redirected
+  (post-redirect-get) to a page that reads the result back from the engine. Spend on, run now, deploy and remove a
+  repo confirm once, on a server-rendered page (`/confirm`, a GET that changes nothing), so CSP needs no script. No new dependency: the engine's lockfile is part of the Build ID, so a web stack
   would sit in every worker and redeploy them on each bump.
 - **Its own service**, `com.software-factory.engine.desk` (launchd / systemd user unit), one label that always runs the
   `current` build. `deploy()` restarts it on the new build right after set-current and before `retire()`, so a build
   is never deleted from under it. `start`, `stop` and `status` include it; the worker loops (`installed_builds`,
-  `stop_worker`) skip it. It gets the worker's PATH so `gh` is found.
+  `stop_worker`) skip it. It gets the worker's PATH so `gh` is found, restarts when it crashes, and logs to
+  `desk.log` in the state dir. It is restarted only when its service file would change (a new build, a new PATH).
+  Its systemd unit uses `KillMode=mixed`, as the worker's. The upgrade the desk starts must outlive the desk's
+  restart, so it is never in the desk's reach: on systemd it runs as a transient unit of its own (`systemd-run
+  --user --unit factory-deploy-<id> --collect`, outside the desk's control group); under launchd, in a session of
+  its own, outside the desk's process group, which is what launchd stops. launchd's `bootout` returns before the
+  job is gone, so a restart waits for the label to go (bounded) and retries `bootstrap`; a desk that still does not
+  start is said in words and the deploy goes on to retire and reconcile.
+  Under systemd without a desktop session, `gh`'s keyring may be locked: the desk then shows CI as unknown with the
+  reason.
 - **Reads**: Temporal live (cheap and local); `engine.toml`, notebooks and logs from disk; `gh` (CI, PRs) cached per
   repo for 10 minutes. When a `gh` read fails, the page keeps the last value with its age, or shows "CI: unknown"
   plus the reason, and never fails the page.
@@ -79,9 +89,15 @@ onto them, so the desk and the CLI share one owner per action:
 - The Engine panel shows "running build X from commit A; source checkout `~/Dev/software-factory` at B (branch b)".
   When they differ, it offers **Deploy**. The desk never pulls or switches branches in the checkout: that checkout
   belongs to the principal, and the desk deploys exactly what the CLI would.
-- Deploy runs `<source>/home/bin/factory engine upgrade` as a detached process (its own session) with its output in
-  `state/deploys/<time>.log`, then redirects to a page that shows that log. Because the upgrade restarts the desk
-  itself, the upgrade must not be the desk's child. A second deploy while one is running is refused, with a lock file
+- Deploy runs `<source>/home/bin/factory engine upgrade` as a detached process (its own session, stdin closed) with
+  its output in `state/deploys/<time>.log`, then redirects to a page that shows that log by its ID (the UTC start
+  time), never a path. Because the upgrade restarts the desk itself, the upgrade must not be the desk's child. It
+  runs under `sh`, which appends the upgrade's exit status to the log, so a desk started after the restart still
+  says whether it worked; `<time>.json` keeps what it was started with and when. Whether it still runs is decided
+  by the deploy lock, never by a stored pid (a reboot can hand it to another process): the newest deploy without
+  an exit status runs while the lock is held, or in its first minute, before the upgrade has taken the lock.
+  Whether the lock is held is asked with a non-blocking shared `flock` that is let go at once (no `flock(1)`,
+  which macOS lacks); the deploy lock waits two seconds for such a probe before it refuses. A second deploy while one is running is refused, with a lock file
   shared with the CLI (`install`, `upgrade`, `start` and `stop` all take it). The desk reads who holds it without
   taking it, so asking never fails a real deploy.
 
@@ -101,7 +117,9 @@ The desk can spend money and deploy, so:
   hand, so another localhost app's malformed cookie can't hide the desk's.
 - **Every POST** must also carry a form token and an `Origin` that equals the desk's own exactly: scheme, host and
   port (`http://localhost:<port>` or `http://127.0.0.1:<port>`), because SameSite treats every port on localhost as
-  the same site. The desk sends no CORS headers and serves CSP `default-src 'self'`.
+  the same site. The desk sends no CORS headers and serves CSP `default-src 'self'`. Its `Referrer-Policy` is
+  `same-origin`, not `no-referrer`: under `no-referrer` browsers send `Origin: null` even on a same-origin form
+  POST, so every change would be refused; `same-origin` still keeps the Referer (and a `?token=`) from other sites.
 - **Untrusted text.** Agent-written text (summaries, failure notes, logs) comes from agents that read untrusted PR
   text, so all of it is escaped. Logs and notebooks are served by run or team ID, never by a client-given path.
 - **What it can't promise.** Temporal's own frontend (7243) and UI (8243) take connections from any local process

@@ -15,7 +15,9 @@ factory engine upgrade                               # deploy a new build; retir
 ```
 
 Each build is a frozen copy of the committed code under `~/.local/share/software-factory/engine/builds/<build>` with
-its own virtualenv and worker service (`sfactory/engine.py`). For development, a virtualenv with
+its own virtualenv and worker service (`sfactory/engine.py`). The Factory Desk is one more service,
+`com.software-factory.engine.desk`, always on the current build (log `~/.local/state/software-factory/desk.log`):
+`install` and `upgrade` (re)start it, `start` and `stop` include it. For development, a virtualenv with
 `pip install -r engine/requirements.lock -e runtime -e engine` runs the tests.
 
 | Module | Holds |
@@ -29,9 +31,9 @@ its own virtualenv and worker service (`sfactory/engine.py`). For development, a
 | `engine/infra/` | the Docker Compose project: Temporal server, Postgres, UI, one-shot setup |
 | `engine/schedules.py` | Temporal Schedules reconciled from each repo's `.factory.toml` |
 | `engine/worker.py` | the worker (task queue `factory`, Worker Versioning, Build ID from the code) |
-| `engine/ops.py` | the reads (`snapshot`) and actions the CLI and the desk share; changes go to `state/actions.jsonl` |
+| `engine/ops.py` | the reads (`snapshot`) and actions the CLI and the desk share; changes go to `state/actions.jsonl`; the desk's deploy (`start_deploy`, logs in `state/deploys/`) |
 | `engine/cli.py` | `signal`, `run-now`, `pause`, `resume`, `reconcile`, `status`, `spend`, `repo`, `build-id`, `set-current`, `drained`: parsing and output only |
-| `engine/desk/` | the Factory Desk ([design](../docs/designs/desk.md)), `python -m engine.desk`: `server.py` (Host and token checks, CSP, the Temporal loop), `pages.py` (HTML in the shared status words), `repos.py` (factory pin, CI and factory PRs, `gh` cached) |
+| `engine/desk/` | the Factory Desk ([design](../docs/designs/desk.md)), `python -m engine.desk`: `server.py` (Host, token, Origin and form-token checks, CSP, the Temporal loop, the changes), `pages.py` (HTML in the shared status words, forms and confirm pages), `repos.py` (factory pin, CI and factory PRs, `gh` cached) |
 | `engine/settings.py` | `~/.config/software-factory/engine.toml` |
 
 Tests (`cd engine && python -m unittest discover -s tests -t .`): workflows on the time-skipping test server,

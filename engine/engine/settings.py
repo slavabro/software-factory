@@ -36,8 +36,10 @@ def config_path() -> Path:
 
 
 def default_state() -> Path:
-    """Logs, worktrees and team notebooks (FACTORY_ENGINE_STATE overrides, read when settings are built)."""
-    return Path(os.environ.get("FACTORY_ENGINE_STATE", "~/.local/state/software-factory")).expanduser()
+    """Logs, worktrees and team notebooks (FACTORY_ENGINE_STATE overrides, read when settings are built); its one
+    owner is `sfactory/engine.py`, which the desk's service writes its log under too."""
+    path: Path = install.state_dir()
+    return path
 
 
 NAMESPACE = "factory"

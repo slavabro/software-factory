@@ -3,7 +3,8 @@
 Pure: no I/O, so a test renders any state without a server. Every state is a word and a shape (`status.mark`), never
 colour alone, and every string that isn't the desk's own (agent-written summaries and notes, PR titles, repo
 config, file contents) goes through `e()`. No inline style or script: the desk serves CSP `default-src 'self'`, so
-the look is one stylesheet, `/desk.css` (STYLE, built on status.CSS).
+the look is one stylesheet, `/desk.css` (STYLE, built on status.CSS). A page shows its action forms only when given
+the form token (`form`); the notice after a change is built from what the engine says now, never from the form.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -27,6 +29,7 @@ RECENT = 10  # finished runs on the overview (each costs a result read)
 RECENT_RUNS = 20  # on the runs page
 TEAM_RUNS = 10  # on a team's page
 SUMMARY_CHARS = 400  # in a list; a team's own page shows the whole summary
+TEXT_CHARS = 512 * 1024  # a deploy's log shows its last this many characters
 NAV = (("/", "Overview"), ("/projects", "Projects"), ("/runs", "Runs"), ("/engine", "Engine"))
 REASON_WORDS = {
     "schedule": "its schedule", "manual": "hand", "ci_red": "red CI", "deploy_failed": "a failed deploy",
@@ -232,6 +235,44 @@ def team_state(team: ops.TeamView) -> tuple[str, str] | None:
     return None
 
 
+# ---- forms --------------------------------------------------------------------------------------------------------
+# A change is a form POSTed to /act/<action> with the form token, then redirected (post-redirect-get). Spending money,
+# deploying and removing a repo first open a confirm page (a GET of /confirm, server-rendered: no script needed),
+# whose form posts with confirmed=yes.
+
+ACTIONS = ("spend-on", "spend-off", "pause", "resume", "run-now", "add-repo", "remove-repo", "deploy")
+CONFIRM = ("spend-on", "run-now", "remove-repo", "deploy")
+
+
+def hidden(fields: dict[str, str]) -> str:
+    return "".join(f'<input type="hidden" name="{e(k)}" value="{e(v)}">' for k, v in fields.items())
+
+
+def post_form(action: str, fields: dict[str, str], label: str, form: str, inputs: str = "") -> str:
+    """A button that makes the change (`inputs`: the form's own fields, HTML)."""
+    return (f'<form method="post" action="/act/{e(action)}" class="act">{hidden({**fields, "form": form})}{inputs}'
+            f'<button type="submit">{e(label)}</button></form>')
+
+
+def confirm_url(action: str, fields: dict[str, str]) -> str:
+    return "/confirm?" + urlencode({"action": action, **fields})
+
+
+def confirm_button(action: str, fields: dict[str, str], label: str) -> str:
+    """A button that opens the action's confirm page (nothing changes yet)."""
+    return (f'<form method="get" action="/confirm" class="act">{hidden({"action": action, **fields})}'
+            f'<button type="submit">{e(label)}</button></form>')
+
+
+def actions(*forms: str) -> str:
+    return f'<div class="actions">{"".join(forms)}</div>'
+
+
+def notice(key: str, word: str, text: str) -> str:
+    """What an action changed, read back from the engine after the redirect: a word and a shape, then the words."""
+    return f'<p class="notice" role="status">{mark(key, word)} {e(text)}</p>'
+
+
 # ---- page frame ---------------------------------------------------------------------------------------------------
 
 def layout(title: str, here: str, settings: EngineSettings, live: Live | None, body: str) -> str:
@@ -284,19 +325,22 @@ def run_list(runs: Iterable[ops.RunView], settings: EngineSettings, empty: str, 
 
 # ---- pages --------------------------------------------------------------------------------------------------------
 
-def spend_card(settings: EngineSettings) -> str:
+def spend_card(settings: EngineSettings, form: str = "") -> str:
     if settings.unattended:
         state = mark("active", "On")
         say = "Teams may start agent sessions on every project."
+        button = post_form("spend-off", {}, "Turn off", form)
     else:
         state = mark("paused", "Off")
         say = "No team starts a new agent session, on any project."
+        button = confirm_button("spend-on", {}, "Turn on…")
     return (f'<section class="card"><h2>Unattended agent runs {state}</h2><p>{say}</p>'
             '<p class="note">The spend switch. Turning it off stops runs that have not started their session yet; a '
-            'session already running finishes. Change it with <code>factory engine spend on|off</code>.</p></section>')
+            'session already running finishes. (Or <code>factory engine spend on|off</code>.)</p>'
+            f'{actions(button) if form else ""}</section>')
 
 
-def needs_you(snap: ops.EngineSnapshot) -> str:
+def needs_you(snap: ops.EngineSnapshot, form: str = "") -> str:
     items = []
     for repo in snap.repos:
         for team in repo.teams:
@@ -305,9 +349,11 @@ def needs_you(snap: ops.EngineSnapshot) -> str:
                 continue
             title, detail = need
             note = team.scheduled.note if team.scheduled else ""
+            buttons = actions(confirm_button("run-now", {"team": team.ref.workflow_id}, "Run once now…"),
+                              post_form("resume", {"team": team.ref.workflow_id}, "Resume its schedule", form)) if form else ""
             items.append(f'<li>{mark("paused")} <strong>{link(team_url(team.ref.workflow_id), f"{repo.name} · {team.ref.team}")}'
                          f'</strong> {e(title)}<div class="note">{e(detail)}</div>'
-                         f'<div class="note">Its note: {e(note or "none")}</div></li>')
+                         f'<div class="note">Its note: {e(note or "none")}</div>{buttons}</li>')
     body = f'<ul class="plain needs">{"".join(items)}</ul>' if items else '<p class="note">Nothing needs you right now.</p>'
     return f'<section><h2>Needs you</h2>{body}</section>'
 
@@ -330,22 +376,25 @@ def anchor(name: str) -> str:
     return "repo-" + re.sub(r"[^A-Za-z0-9_-]", "-", name)
 
 
-def project_card(repo: ops.RepoView, gh: RepoGitHub | None, pins: tuple[str, ...] | None, full: bool) -> str:
+def project_card(repo: ops.RepoView, gh: RepoGitHub | None, pins: tuple[str, ...] | None, full: bool,
+                 form: str = "") -> str:
     rows = [("Path", f"<code>{e(repo.entry)}</code>"), ("Factory pin", pins_html(pins))]
     if gh is not None:
         rows += [("Main branch CI", ci_mark(gh.ci)), ("Open factory PRs", prs_html(gh.prs))]
     rows.append(("Teams", team_counts(repo)))
     more = "" if full else f'<p>{link("/projects#" + anchor(repo.name), "Open its teams")}</p>'
+    if full and form:
+        more = actions(confirm_button("remove-repo", {"entry": repo.entry}, "Remove this repo…"))
     return f'<section class="card" id="{e(anchor(repo.name))}"><h2>{e(repo.name)}</h2>{facts(rows)}{more}</section>'
 
 
 def overview(settings: EngineSettings, live: Live, github: dict[str, RepoGitHub],
-             pins: dict[str, tuple[str, ...] | None]) -> str:
-    body = spend_card(settings)
+             pins: dict[str, tuple[str, ...] | None], form: str = "", notice: str = "") -> str:
+    body = notice + spend_card(settings, form)
     snap = live.snap
     if snap is None:
         return layout("Overview", "/", settings, live, body + unreachable(live))
-    body += needs_you(snap)
+    body += needs_you(snap, form)
     cards = "".join(project_card(r, github.get(r.root), pins.get(r.root), full=False) for r in snap.repos)
     body += f'<section><h2>Projects</h2><div class="grid">{cards or "<p class=note>No repos yet.</p>"}</div></section>'
     runs = (*snap.open_runs, *snap.recent_runs)
@@ -378,17 +427,27 @@ def team_row(team: ops.TeamView, live: Live, settings: EngineSettings) -> str:
             f'<td data-label="State">{schedule_mark(team)}</td></tr>')
 
 
+def add_repo_form(form: str) -> str:
+    field = ('<label class="field">Path of its checkout on this machine'
+             '<input type="text" name="path" required placeholder="~/Dev/project" autocomplete="off"></label>')
+    return (f'<section class="card"><h2>Add a repo</h2><p class="note">Its default branch must have a .factory.toml. '
+            'Its teams\' schedules start paused until each has run once by hand.</p>'
+            f'{post_form("add-repo", {}, "Add the repo", form, field)}</section>')
+
+
 def projects(settings: EngineSettings, live: Live, github: dict[str, RepoGitHub],
-             pins: dict[str, tuple[str, ...] | None]) -> str:
+             pins: dict[str, tuple[str, ...] | None], form: str = "", notice: str = "") -> str:
     snap = live.snap
+    adding = add_repo_form(form) if form else ""
     if snap is None:
         rows = "".join(f"<li><code>{e(r)}</code></li>" for r in settings.repos)
-        body = unreachable(live) + f'<section><h2>Repos in engine.toml</h2><ul class="plain">{rows}</ul></section>'
+        body = (notice + unreachable(live) + f'<section><h2>Repos in engine.toml</h2><ul class="plain">{rows}</ul>'
+                f'</section>')
         return layout("Projects", "/projects", settings, live, body)
-    body = (f'<p class="note">Schedules are in the engine\'s time zone, {e(settings.time_zone)}; each repo sets them '
-            'in its own .factory.toml.</p>')
+    body = notice + (f'<p class="note">Schedules are in the engine\'s time zone, {e(settings.time_zone)}; each repo '
+                     'sets them in its own .factory.toml.</p>')
     for repo in snap.repos:
-        card = project_card(repo, github.get(repo.root), pins.get(repo.root), full=True)
+        card = project_card(repo, github.get(repo.root), pins.get(repo.root), full=True, form=form)
         if repo.teams:
             head = "".join(f"<th>{h}</th>" for h in ("Team", "Schedule", "Next run", "Last run", "Failures in a row",
                                                      "State"))
@@ -397,11 +456,27 @@ def projects(settings: EngineSettings, live: Live, github: dict[str, RepoGitHub]
                                                       f'</tr></thead><tbody>{rows}</tbody></table></div></section>')
         body += card
     if not snap.repos:
-        body += '<p class="note">No repos yet: <code>factory engine repo add PATH</code>.</p>'
-    return layout("Projects", "/projects", settings, live, body)
+        body += '<p class="note">No repos yet: add one below, or <code>factory engine repo add PATH</code>.</p>'
+    return layout("Projects", "/projects", settings, live, body + adding)
 
 
-def team_page(settings: EngineSettings, live: Live, team: ops.TeamView | None, team_id: str) -> str:
+def team_actions(team: ops.TeamView, form: str) -> str:
+    """Pause or resume its schedule (with an optional note) and run it now; a team on events only can only run."""
+    ref, s = team.ref, team.scheduled
+    out = ""
+    if s is not None:
+        verb = "resume" if s.paused else "pause"
+        note = ('<label class="field">Note (optional)<input type="text" name="note" maxlength="300" '
+                f'placeholder="{"resumed" if s.paused else "paused"} by hand" autocomplete="off"></label>')
+        out += post_form(verb, {"team": ref.workflow_id}, "Resume its schedule" if s.paused else "Pause its schedule",
+                         form, note)
+    out += confirm_button("run-now", {"team": ref.workflow_id}, "Run now…")
+    return (f'<section class="card"><h2>Actions</h2>{actions(out)}<p class="note">Run now wakes the team past its '
+            "schedule's pause; it starts an agent session.</p></section>")
+
+
+def team_page(settings: EngineSettings, live: Live, team: ops.TeamView | None, team_id: str, form: str = "",
+              notice: str = "") -> str:
     if live.snap is None:
         return layout("Team", "", settings, live, unreachable(live))
     if team is None:
@@ -427,7 +502,7 @@ def team_page(settings: EngineSettings, live: Live, team: ops.TeamView | None, t
                             *([link(ui_url(settings, "schedules", ref.schedule_id), "Schedule in Temporal",
                                     external=True)] if s else [])])),
     ]
-    body = f'<section class="card">{facts(rows)}</section>'
+    body = notice + f'<section class="card">{facts(rows)}</section>' + (team_actions(team, form) if form else "")
     if running:
         body += f'<section><h2>Running now</h2>{run_list(running, settings, "", team_link=False)}</section>'
     recent = f"<p>{unread(error)}</p>" if error else run_list(runs, settings, "This team has not run yet.",
@@ -472,8 +547,47 @@ def build_rows(live: Live) -> str:
     return f'<ul class="plain">{"".join(items)}</ul>'
 
 
-def engine_page(settings: EngineSettings, live: Live, source: tuple[str, str | None, str | None] | None,
-                deploying: str | None) -> str:
+DEPLOY_WORDS = {"running": ("running", "Deploying"), "done": ("done", "Deployed"), "failed": ("failed", "Failed"),
+                "unknown": ("unknown", "Ended without an exit status")}
+
+
+def deploy_mark(run: ops.DeployRun) -> str:
+    key, word = DEPLOY_WORDS[run.state]
+    return mark(key, f"{word} (exit {run.exit_code})" if run.state == "failed" else word)
+
+
+def deploy_url(deploy_id: str) -> str:
+    return "/deploy?" + urlencode({"id": deploy_id})
+
+
+def source_section(plan: ops.DeployPlan | None, deploys: list[ops.DeployRun], form: str) -> str:
+    if plan is None:
+        return ('<p class="note">No deploy has recorded its source checkout yet (the next '
+                '<code>factory engine upgrade</code> does).</p>')
+    rows = [
+        ("Running", f"build <code>{e(plan.build or 'none')}</code> from commit <code>{e(short(plan.commit))}</code>"),
+        ("Source checkout", f"<code>{e(plan.source)}</code> at <code>{e(short(plan.head))}</code> "
+                            f"(branch {e(plan.branch or 'detached')})"),
+    ]
+    out = facts(rows)
+    if plan.busy:
+        out += f'<p>{mark("running", "Busy")} {e(plan.busy)} is running.</p>'
+    elif plan.head is not None and plan.head == plan.commit:
+        out += '<p class="note">The running build is the checkout\'s HEAD: nothing to deploy.</p>'
+    elif plan.refusal:
+        out += f'<p>{mark("unknown", "Cannot deploy")} {e(plan.refusal)}</p>'
+    elif form:
+        out += ('<p class="note">The checkout differs from the running build. Deploy runs '
+                '<code>factory engine upgrade</code> in it, exactly as the CLI would; the desk never pulls or switches '
+                'branches.</p>' + actions(confirm_button("deploy", {}, "Deploy the checkout's HEAD…")))
+    if deploys:
+        items = "".join(f'<li>{deploy_mark(d)} {link(deploy_url(d.deploy_id), d.deploy_id)}</li>' for d in deploys)
+        out += f'<h3>Deploys from the desk</h3><ul class="plain">{items}</ul>'
+    return out
+
+
+def engine_page(settings: EngineSettings, live: Live, plan: ops.DeployPlan | None, deploys: list[ops.DeployRun],
+                form: str = "") -> str:
     reachable = (mark("running", "Reachable") if live.reachable
                  else mark("stopped", "Not answering") + f' <span class="note">{e(live.error)}</span>')
     temporal = facts([
@@ -481,24 +595,7 @@ def engine_page(settings: EngineSettings, live: Live, source: tuple[str, str | N
         ("Namespace", f"<code>{e(NAMESPACE)}</code>"),
         ("Dashboard", link(ui_url(settings), f"localhost:{settings.ui_port}", external=True)),
     ])
-    snap = live.snap
-    current = snap.current_build if snap else install.current_build()
-    running_commit = next((b.commit for b in snap.builds if b.build_id == current), None) if snap else None
-    if source is None:
-        src = '<p class="note">No deploy has recorded its source checkout yet (the next factory engine upgrade does).</p>'
-    else:
-        path, head, branch = source
-        same = head is not None and running_commit is not None and head == running_commit
-        verdict = ("the checkout is at the running build's commit" if same else
-                   "the checkout differs from the running build: <code>factory engine upgrade</code> deploys it")
-        src = facts([
-            ("Running", f"build <code>{e(current or 'none')}</code> from commit <code>{e(short(running_commit))}</code>"),
-            ("Source checkout", f"<code>{e(path)}</code> at <code>{e(short(head))}</code> "
-                                f"(branch {e(branch or 'detached')})"),
-            ("", f'<span class="note">{verdict}</span>'),
-        ])
-    if deploying:
-        src += f'<p>{mark("running", "Deploying")} {e(deploying)}</p>'
+    src = source_section(plan, deploys, form)
     config = facts([
         ("Time zone", e(settings.time_zone)),
         ("Spend switch", mark("active", "On") if settings.unattended else mark("paused", "Off")),
@@ -522,6 +619,137 @@ def text_page(settings: EngineSettings, title: str, back: str, text: str, note: 
 
 def message_page(settings: EngineSettings, title: str, text: str) -> str:
     return layout(title, "", settings, None, f"<p>{e(text)}</p>")
+
+
+def error_page(settings: EngineSettings, what: str, reason: str, back: str = "/") -> str:
+    """An action that did not happen, and why (never a traceback)."""
+    body = (f'<p class="alert">{mark("failed", "Not done")} {e(reason)}</p>'
+            f'<p>{link(back, "Back")}</p>')
+    return layout(what, "", settings, None, body)
+
+
+# ---- what an action changed (read back after the redirect, never echoed from the form) ---------------------------
+
+def spend_notice(settings: EngineSettings) -> str:
+    if settings.unattended:
+        return notice("active", "On", "Unattended agent runs are on: teams may start agent sessions.")
+    return notice("paused", "Off", "Unattended agent runs are off: no team starts a new agent session.")
+
+
+def team_notice(done: str, team: ops.TeamView, live: Live, settings: EngineSettings) -> str:
+    name = f"{team.ref.repo_name} · {team.ref.team}"
+    if done in ("pause", "resume"):
+        s = team.scheduled
+        if s is None:
+            return notice("unknown", "Unknown", f"{name}: its schedule could not be read back.")
+        if s.paused:
+            return notice("paused", "Paused", f"{name}: its schedule is paused (note: {s.note or 'none'}).")
+        return notice("active", "Active", f"{name}: its schedule is active (note: {s.note or 'none'}).")
+    snap = live.snap
+    running = next((r for r in snap.open_runs if r.workflow_id == team.ref.workflow_id), None) if snap else None
+    spend = "" if settings.unattended else " The spend switch is off: the run stops before it starts a session."
+    if running is not None:
+        return notice("running", "Running", f"{name} is running now.{spend}")
+    runs = live.team_runs.get(team.ref.workflow_id, ())
+    if runs:
+        key, word = runs[0].state
+        return notice(key, word, f"{name}: its latest run has ended.{spend}")
+    return notice("unknown", "Not seen yet", f"{name} was woken; reload to see its run.{spend}")
+
+
+def repo_notice(done: str, args: dict[str, str], settings: EngineSettings, live: Live) -> str:
+    snap = live.snap
+    if done == "add-repo":
+        repo = next((r for r in snap.repos if r.name == args.get("repo")), None) if snap else None
+        if repo is None:
+            return notice("unknown", "Unknown", "The repo could not be read back from the engine.")
+        teams = len(repo.teams)
+        return notice("done", "Added", f"{repo.name} is one of the engine's repos, with {teams} "
+                                       f"team{'' if teams == 1 else 's'}; new schedules are paused until each team "
+                                       "has run once by hand.")
+    entry = args.get("entry", "")
+    if any(install.same_repo(entry, r) for r in settings.repos):
+        return notice("unknown", "Still there", f"{entry} is still one of the engine's repos.")
+    name = args.get("repo", "")
+    left = [r for r in snap.open_runs if r.repo_name == name] if snap else []
+    runs = f" {len(left)} of its runs are still open: they finish, nothing new starts." if left else ""
+    return notice("done", "Removed", f"{entry} is no longer one of the engine's repos; its schedules are deleted.{runs}")
+
+
+# ---- confirm pages -----------------------------------------------------------------------------------------------
+
+def confirm_page(settings: EngineSettings, title: str, body: str, action: str, fields: dict[str, str], label: str,
+                 form: str, back: str) -> str:
+    go = post_form(action, {**fields, "confirmed": "yes"}, label, form)
+    return layout(title, "", settings, None, f'<section class="card confirm">{body}'
+                                             f'{actions(go, link(back, "Cancel"))}</section>')
+
+
+def confirm_spend_on(settings: EngineSettings, form: str) -> str:
+    body = ("<p>Teams may then start agent sessions on every project, on their schedules and on events: this spends "
+            "money.</p>")
+    return confirm_page(settings, "Turn unattended agent runs on?", body, "spend-on", {}, "Turn on", form, "/")
+
+
+def confirm_run_now(settings: EngineSettings, team: ops.TeamView, form: str) -> str:
+    ref = team.ref
+    body = (f"<p>Run <strong>{e(ref.repo_name)} · {e(ref.team)}</strong> now, past its schedule's pause. It starts "
+            f"an agent session of up to {team.budget_minutes} min: this spends money.</p>")
+    if not settings.unattended:
+        body += (f'<p class="alert">{mark("paused", "Spend switch off")} The run would stop at once, before it starts '
+                 "a session. Turn the spend switch on first to have it work.</p>")
+    return confirm_page(settings, f"Run {ref.repo_name} · {ref.team} now?", body, "run-now",
+                        {"team": ref.workflow_id}, "Run now", form, team_url(ref.workflow_id))
+
+
+def confirm_remove_repo(settings: EngineSettings, live: Live, entry: str, form: str) -> str:
+    snap = live.snap
+    if snap is None:
+        body = (f'<p class="alert">{mark("unknown")} The engine\'s state could not be read ({e(live.error)}), so '
+                "the schedules this would delete and the runs still open can't be listed. Try again when it "
+                "answers.</p>")
+        return layout(f"Remove {entry}?", "", settings, live, body + f'<p>{link("/projects", "Back")}</p>')
+    repo = next((r for r in snap.repos if r.entry == entry), None)
+    name = repo.name if repo else Path(entry).name
+    gone = [s for s in snap.schedules if s.repo_name == name]
+    open_ = [r for r in snap.open_runs if r.repo_name == name]
+    scheds = "".join(f"<li><code>{e(s.schedule_id)}</code></li>" for s in gone) or "<li>none</li>"
+    runs = "".join(f"<li>{run_mark(r)} {e(r.workflow_id)}</li>" for r in open_) or "<li>none</li>"
+    body = (f"<p>Remove <code>{e(entry)}</code> from the engine's repos. Its checkout and its history stay as they "
+            f'are.</p><h3>Schedules that will be deleted</h3><ul class="plain">{scheds}</ul>'
+            f'<h3>Runs still open</h3><p class="note">They finish; nothing new starts.</p><ul class="plain">{runs}</ul>')
+    return confirm_page(settings, f"Remove {name}?", body, "remove-repo", {"entry": entry, "repo": name},
+                        "Remove the repo", form, "/projects")
+
+
+def confirm_deploy(settings: EngineSettings, plan: ops.DeployPlan, form: str) -> str:
+    body = (f"<p>Deploy <code>{e(plan.source)}</code> at <code>{e(short(plan.head))}</code> "
+            f"(branch {e(plan.branch or 'detached')}) over build <code>{e(plan.build or 'none')}</code> from "
+            f"<code>{e(short(plan.commit))}</code>.</p><p>This runs <code>factory engine upgrade</code> in that "
+            "checkout: a new build and its worker, new runs go to it, drained builds are retired. The desk restarts "
+            "on the new build, so a page may not load for a few seconds. Open runs finish on the build they "
+            "started on.</p>")
+    return confirm_page(settings, "Deploy the source checkout?", body, "deploy", {}, "Deploy", form, "/engine")
+
+
+def deploy_page(settings: EngineSettings, run: ops.DeployRun) -> str:
+    meta = run.meta
+    rows = [("State", deploy_mark(run)),
+            ("Source", f"<code>{e(meta.get('source', '?'))}</code> at <code>{e(short(meta.get('head')))}</code> "
+                       f"(branch {e(meta.get('branch') or 'detached')})"),
+            ("Over", f"build <code>{e(meta.get('build') or 'none')}</code> from commit "
+                     f"<code>{e(short(meta.get('commit')))}</code>")]
+    note = ""
+    if run.state == "running":
+        note = ('<p class="note">Reload to follow it. The desk restarts on the new build during the deploy, so a '
+                "reload may fail for a few seconds.</p>")
+    elif run.state == "unknown":
+        note = '<p class="note">The upgrade is gone without its exit status: it was stopped. Its log is below.</p>'
+    text = run.log[-TEXT_CHARS:]
+    cut = f'<p class="note">The last {TEXT_CHARS // 1024} K characters.</p>' if len(run.log) > TEXT_CHARS else ""
+    body = (f'<section class="card">{facts(rows)}{note}</section>{cut}<pre class="text">{e(text)}</pre>'
+            f'<p>{link("/engine", "Back to the engine")}</p>')
+    return layout(f"Deploy {run.deploy_id}", "", settings, None, body)
 
 
 STYLE: str = status.CSS + """
@@ -561,6 +789,17 @@ ul.runs li{display:grid;gap:3px;padding:10px 0;border-bottom:1px solid var(--bor
 table{width:100%;border-collapse:collapse;font-size:14px}
 th{text-align:left;font-size:12px;font-weight:600;color:var(--muted);border-bottom:1px solid var(--border);padding:6px 8px}
 td{border-bottom:1px solid var(--border);padding:8px;vertical-align:top}
+h3{font-size:14px;margin:14px 0 4px}
+.notice{border:1px solid var(--border);border-left:4px solid var(--ink);border-radius:12px;padding:10px 14px;
+background:var(--card)}
+.actions{display:flex;flex-wrap:wrap;align-items:flex-end;gap:10px 14px;margin-top:12px}
+form.act{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px;margin:0}
+.field{display:grid;gap:4px;font-size:13px;color:var(--muted)}
+input[type=text]{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--border);border-radius:8px;
+min-height:44px;padding:0 10px;min-width:min(320px,100%)}
+button{font:inherit;font-weight:600;color:var(--bg);background:var(--fg);border:0;border-radius:8px;min-height:44px;
+padding:0 16px;cursor:pointer}
+.actions a{display:inline-flex;align-items:center;min-height:44px}
 pre.text{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
 background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px}
 @media (max-width:640px){

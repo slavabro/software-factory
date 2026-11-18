@@ -184,6 +184,10 @@ class OpsServerTest(unittest.IsolatedAsyncioTestCase, Isolated):
         self.assertIn("not opted in", str(caught.exception))
         with self.assertRaises(ops.OpError):
             await ops.add_repo(self.client, self.settings, str(other / "missing"))
+        for relative in (".", "repo", "../repo"):
+            with self.assertRaises(ops.OpError) as caught:
+                await ops.add_repo(self.client, self.settings, relative)
+            self.assertIn("absolute path or a ~/… path", str(caught.exception))
         self.assertEqual(settings_mod.load().repos, (str(self.repo),))
 
     async def test_status_prints_one_line_per_schedule_and_run(self):

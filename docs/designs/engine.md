@@ -19,6 +19,7 @@ history. The factory changes a product only through pull requests; it never talk
 | Temporal UI 2.57 | same project | host port 8243 → container 8080 |
 | Setup (one-shot) | same project, `temporalio/admin-tools` | creates namespace `factory` (retention 30 days) and the search attributes `FactoryRepo`, `FactoryTeam` (Keyword) |
 | Worker | host process, launchd (macOS) / systemd user service (Linux) | needs git, `gh`, agent CLIs, Orca on the host |
+| Factory Desk | host process, service `com.software-factory.engine.desk`, on the current build | 127.0.0.1:8245 ([desk.md](desk.md)); log `~/.local/state/software-factory/desk.log` |
 
 Not `temporal server start-dev`: it keeps no history, and a product's dev script may stop every `start-dev` on the
 machine (FamilyOffice's `start_all.sh` does). Only host ports change, never the container's; ports and versions are
@@ -35,9 +36,9 @@ engine/                        its own pyproject + lockfile: factory-runtime (..
 ├── engine/workflows/tick.py   ScheduleTick
 ├── engine/activities/         repo.py (resolve, prepare, deliver, clean), agent.py (the session), teams.py (budget, outcome, wake)
 ├── engine/schedules.py        desired schedules from each repo's .factory.toml → create / update / delete
-├── engine/ops.py              the engine's reads and actions (snapshot, pause, run now, …), shared with the desk
+├── engine/ops.py              the engine's reads and actions (snapshot, pause, run now, deploy, …), shared with the desk
 ├── engine/cli.py              signal, run-now, pause, resume, status (what `factory engine …` calls), on ops.py
-├── engine/desk/               the Factory Desk (docs/designs/desk.md): server.py (safety, reads), pages.py, repos.py (gh)
+├── engine/desk/               the Factory Desk (docs/designs/desk.md): server.py (safety, reads, changes), pages.py, repos.py (gh)
 ├── engine/worker.py           the one worker: task queue `factory`, Worker Versioning
 └── tests/                     time-skipping tests, activity tests, replay tests
 ```
@@ -124,6 +125,8 @@ workflow ID (unique per scheduled time, so a retried tick is deduped).
   schedule is `[upgrade] schedule`), as committed on its default branch. `engine.schedules`
   reconciles one Temporal Schedule per (repo, team), ID `schedule/<repo>/<team>`: created, updated through
   `handle.update()`, or deleted to match the config, whenever `factory engine upgrade` runs or the config changes.
+  An unchanged schedule is left alone and not reported: the server keeps a cron as calendars, so each schedule
+  carries a digest of what reconcile built in its action's memo, and only a differing digest is updated.
 - **Overlap policy `SKIP`** on ticks (a tick takes a second; the team workflow already serialises the runs).
 - **Catchup window = one day:** a laptop that slept through 02:00 runs when it wakes; a run missed by more than a
   day is dropped, not replayed.
@@ -157,7 +160,8 @@ so changing workflow code never breaks a run in flight and needs no patching.
   worker once the server reports it drained (nothing pinned to it still open; the server re-checks every few
   minutes). Runs are bounded by their budget, so an old worker is retired at the first upgrade after its longest
   run (budget + 30 min) ends. This is the rainbow deployment Worker Versioning requires (rolling
-  replacement isn't supported).
+  replacement isn't supported). Right after the new build is Current, and before any old build is retired, the
+  desk's service is restarted onto it, so no build is deleted from under the desk.
 - **First install** sets the first version Current; without that, no workflow tasks reach a versioned worker.
 - **Replay tests** in CI replay each workflow's history on the code that produced it, which catches workflow code
   that isn't deterministic. Old histories never meet new code: they are pinned to their own build.
