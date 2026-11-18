@@ -15,7 +15,7 @@ from temporalio.client import Client
 
 from factory_runtime.temporal import get_client
 from engine import ops, settings as settings_mod
-from engine.factory import config
+from engine.factory import config, status
 from engine.settings import DEPLOYMENT, EngineSettings
 from engine.worker import build_id
 
@@ -63,26 +63,37 @@ async def cmd_reconcile(client: Client, settings: EngineSettings, a: argparse.Na
     return 0
 
 
+FAILED_WORDS = {"failed": "Failed", "terminated": "Terminated", "canceled": "Cancelled", "timed_out": "Timed out"}
+
+
 def run_line(run: ops.RunView) -> str:
+    """One run in the shared status words: `✕ Failed`, `▶ Running since …`, never a colour or a raw enum name."""
     if run.status == "running":
-        return f"{run.workflow_id}: running since {_minutes(run.started)}"
-    line = f"{run.workflow_id}: {run.status} {_minutes(run.closed)}"
+        return f"{run.workflow_id}: {status.text('running', 'Running since ' + _minutes(run.started))}"
+    closed = _minutes(run.closed)
     if run.status == "continued_as_new":
-        return line + " — continued with the wakes that arrived during the run"
+        return f"{run.workflow_id}: {status.text('continued')} {closed} — with the wakes that arrived during the run"
     if run.outcome is not None:
-        return line + f" — {run.outcome}: {run.summary[:120]}"
-    return line + f" — {(run.failure or 'no reason recorded')[:160]}"
+        return f"{run.workflow_id}: {status.text(run.outcome)} {closed} — {run.summary[:120]}"
+    if run.status == "completed":  # its result could not be read
+        return f"{run.workflow_id}: {status.text('unknown', 'Completed')} {closed} — {(run.failure or '')[:160]}"
+    word = FAILED_WORDS.get(run.status, run.status.replace("_", " ").capitalize())
+    return f"{run.workflow_id}: {status.text('failed', word)} {closed} — {(run.failure or 'no reason recorded')[:160]}"
+
+
+def schedule_line(s: ops.ScheduleView) -> str:
+    state = status.text("paused", f"Paused ({s.note or 'no note'})") if s.paused else status.text("active")
+    return f"{s.schedule_id}: {state}, next {_minutes(s.next_run) or '—'}"
 
 
 async def cmd_status(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
     snap = await ops.snapshot(client, settings, recent=a.recent)
     for s in snap.schedules:
-        state = f"PAUSED ({s.note or 'no note'})" if s.paused else "active"
-        print(f"{s.schedule_id}: {state}, next {_minutes(s.next_run) or '—'}")
+        print(schedule_line(s))
     for run in (*snap.open_runs, *snap.recent_runs):
         print(run_line(run))
     if not snap.settings.unattended:
-        print("spend switch: off — no team starts an agent session (factory engine spend on)")
+        print(f"spend switch: {status.text('paused', 'Off')} — no team starts an agent session (factory engine spend on)")
     return 0
 
 
@@ -108,7 +119,8 @@ async def cmd_drained(client: Client, settings: EngineSettings, a: argparse.Name
 async def cmd_repo(client: Client, settings: EngineSettings, a: argparse.Namespace) -> int:
     if a.action == "add":
         res = await ops.add_repo(client, settings, a.path)
-        print(f"{res.entry}: {"already one of the engine's repos" if res.unchanged else 'added'} ({res.name})")
+        done = "already one of the engine's repos" if res.unchanged else "added"
+        print(f"{res.entry}: {done} ({res.name})")
     else:
         res = await ops.remove_repo(client, settings, a.path)
         print(f"{res.entry}: removed ({res.name})")

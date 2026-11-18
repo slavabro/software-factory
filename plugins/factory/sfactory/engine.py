@@ -13,7 +13,7 @@ any time without ever running another build's code (Worker Versioning pins each 
                                               the engine's own commands (engine/engine/cli.py, on engine/ops.py)
 
 engine.toml has one writer, the functions under "settings" below (install, the engine's CLI and the desk call
-them); its keys are documented in engine/engine/settings.py. One deploy runs at a time (`deploy_lock`).
+them); its keys are documented in engine/engine/settings.py. One deploy, start or stop runs at a time (`deploy_lock`).
 
 Standard library only: everything Temporal is in the engine's virtualenv.
 """
@@ -41,9 +41,12 @@ CONFIG_DIR = Path(os.environ.get("FACTORY_ENGINE_CONFIG_DIR", "~/.config/softwar
 SHARE = Path(os.environ.get("FACTORY_ENGINE_HOME", "~/.local/share/software-factory/engine")).expanduser()
 BUILDS = SHARE / "builds"
 CURRENT = SHARE / "current"
-DEPLOY_LOCK = SHARE / "deploy.lock"  # held by whoever deploys: install, upgrade (the desk runs upgrade)
+SOURCE = SHARE / "source"  # the checkout the current build was deployed from (`~/…`), the one the desk deploys
+DEPLOY_LOCK = SHARE / "deploy.lock"  # held by whoever deploys, starts or stops: the desk runs upgrade
 ENV_FILE = CONFIG_DIR / "engine.env"
-SETTINGS = CONFIG_DIR / "engine.toml"
+# engine.toml: the one owner of its path. FACTORY_ENGINE_CONFIG names the file (the worker and the engine's CLI get
+# it from here); without it, the file is in CONFIG_DIR. engine/settings.py reads this name, never its own.
+SETTINGS = Path(os.environ.get("FACTORY_ENGINE_CONFIG") or CONFIG_DIR / "engine.toml").expanduser()
 COMPOSE = "engine/infra/docker-compose.yml"
 LABEL = os.environ.get("FACTORY_ENGINE_LABEL", "com.software-factory.engine")
 PROJECT = os.environ.get("FACTORY_ENGINE_PROJECT", "software-factory")  # Docker Compose project
@@ -120,7 +123,9 @@ def _locked(lock: Path, blocking: bool = True) -> Iterator[int]:
 
 def write_atomic(path: Path, text: str, mode: int = 0o644) -> None:
     """Write through a temp file in the same directory, then rename: a reader sees the old file or the new, never a
-    half-written one. An existing file keeps its permissions."""
+    half-written one. An existing file keeps its permissions; a symlink is followed, so its target is replaced, not
+    the link."""
+    path = path.expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     try:
@@ -182,11 +187,6 @@ def set_setting(key: str, value: bool | int | str, path: Path | None = None) -> 
     return edit_settings(change, path)
 
 
-def record_source(source: Path = FACTORY) -> None:
-    """engine.toml `source`: the checkout install or upgrade runs from, the one the desk deploys."""
-    set_setting("source", home_form(source))
-
-
 def repr_toml(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -194,7 +194,9 @@ def repr_toml(value) -> str:
         return str(value)
     if isinstance(value, list):
         return "[" + ", ".join(repr_toml(v) for v in value) + "]"
-    return json.dumps(str(value), ensure_ascii=False)  # JSON's string escapes are valid in a TOML basic string
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)  # JSON's string escapes are valid in a TOML basic string
+    raise TypeError(f"engine.toml holds no {type(value).__name__} values ({value!r})")
 
 
 def ensure_env_file() -> None:
@@ -255,10 +257,15 @@ def port_taken(port: int) -> bool:
 
 def snapshot(source: Path = FACTORY) -> tuple[str, Path]:
     """Copy the checkout's committed engine code (HEAD, not uncommitted edits) to a fresh build dir."""
+    head = subprocess.run(["git", "-C", str(source), "rev-parse", "--verify", "HEAD^{commit}"], capture_output=True,
+                          text=True)
+    if head.returncode:
+        raise SystemExit(f"factory engine: {source} has no commit to build: {head.stderr.strip()}")
+    commit = head.stdout.strip()  # resolved once, so the archive and COMMIT are the same commit
     SHARE.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix="staging-", dir=SHARE))
     with tempfile.NamedTemporaryFile(suffix=".tar") as tar:
-        archive = subprocess.run(["git", "-C", str(source), "archive", "--format=tar", "-o", tar.name, "HEAD", *SNAPSHOT],
+        archive = subprocess.run(["git", "-C", str(source), "archive", "--format=tar", "-o", tar.name, commit, *SNAPSHOT],
                                  capture_output=True, text=True)
         if archive.returncode:
             shutil.rmtree(staging)
@@ -275,9 +282,29 @@ def snapshot(source: Path = FACTORY) -> tuple[str, Path]:
         BUILDS.mkdir(parents=True, exist_ok=True)
         staging.rename(target)
     # The latest commit this build was taken from: a later commit that changes no versioned file is the same build.
-    head = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
-    write_atomic(target / COMMIT, head.stdout.strip() + "\n")
+    write_atomic(target / COMMIT, commit + "\n")
     return build, target
+
+
+def main_worktree(checkout: Path) -> Path:
+    """The repo's main worktree for any of its worktrees (a linked one, e.g. an agent's under .claude/worktrees, is
+    temporary and must never be recorded as the source); the path itself when git can't tell."""
+    common = subprocess.run(["git", "-C", str(checkout), "rev-parse", "--path-format=absolute", "--git-common-dir"],
+                            capture_output=True, text=True)
+    if common.returncode:
+        return checkout.resolve()
+    git_dir = Path(common.stdout.strip())
+    return git_dir.parent.resolve() if git_dir.name == ".git" else checkout.resolve()
+
+
+def record_source(checkout: Path = FACTORY) -> None:
+    """SOURCE: the checkout (its main worktree, `~/…`) the current build was deployed from. Kept next to `current`,
+    not in engine.toml, so an older build's settings reader never meets a key it doesn't know."""
+    write_atomic(SOURCE, home_form(main_worktree(checkout)) + "\n")
+
+
+def recorded_source() -> str | None:
+    return (SOURCE.read_text().strip() or None) if SOURCE.is_file() else None
 
 
 def build_commit(build: str) -> str | None:
@@ -427,6 +454,7 @@ def deploy() -> list[str]:
     else:
         raise SystemExit(f"factory engine: build {build} never became current:\n{proc.stderr[-1500:]}")
     write_atomic(CURRENT, build)
+    record_source()  # the checkout this build came from, now that it is current
     out.append(f"current build: {build}" + (f" (was {previous})" if previous and previous != build else ""))
     out += retire(python, keep=build)
     reconcile = engine_cli(python, "reconcile", capture=True)
@@ -456,35 +484,48 @@ def retire(python: Path, keep: str) -> list[str]:
 
 
 @contextmanager
-def deploy_lock() -> Iterator[None]:
-    """One deploy at a time on this machine (install, upgrade; the desk runs upgrade): a second is refused, not
-    queued. The lock goes with its process, so a deploy that crashed never blocks the next."""
+def deploy_lock(what: str) -> Iterator[None]:
+    """One change to the engine's builds and services at a time on this machine (install, upgrade, start, stop; the
+    desk runs upgrade): a second is refused, not queued. The lock goes with its process, so one that crashed never
+    blocks the next. While held, the lock file names the holder (`deploy_running` reads it)."""
     with ExitStack() as held:
         try:
             fd = held.enter_context(_locked(DEPLOY_LOCK, blocking=False))
         except BlockingIOError:
-            raise SystemExit(f"factory engine: another deploy is running ({deploy_running() or 'it just ended'}); "
+            raise SystemExit(f"factory engine: {deploy_running() or 'another engine change'} is running; "
                              "try again when it has finished") from None
         os.ftruncate(fd, 0)
-        os.write(fd, f"pid {os.getpid()} since {time.strftime('%Y-%m-%d %H:%M:%S')}\n".encode())
-        yield
+        os.write(fd, f"{what} (pid {os.getpid()}) since {time.strftime('%Y-%m-%d %H:%M:%S')}\n".encode())
+        try:
+            yield
+        finally:
+            os.ftruncate(fd, 0)  # cleared before the lock is let go, so a reader never sees a holder that left
 
 
 def deploy_running() -> str | None:
-    """Who holds the deploy lock ("pid N since T"), or None when no deploy runs: for a caller that must refuse
-    before it starts one (the desk)."""
+    """Who holds the deploy lock ("upgrade (pid N) since T"), or None. Reads the holder's line without touching the
+    lock, so asking never makes a real deploy fail. A line left by a holder that died (its pid gone) counts as none.
+    Advisory: the deploy that is started still takes the lock itself, and is refused if it lost a race."""
     try:
-        with _locked(DEPLOY_LOCK, blocking=False):
-            return None
-    except BlockingIOError:
-        return DEPLOY_LOCK.read_text().strip() or "pid unknown"
+        line = DEPLOY_LOCK.read_text().strip()
+    except OSError:
+        return None
+    pid = line.partition("(pid ")[2].partition(")")[0]
+    if not pid.isdigit():
+        return None
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass  # alive, someone else's
+    return line
 
 
 def install(repos: list[str]) -> int:
     if not shutil.which("docker"):
         raise SystemExit("factory engine: Docker is required (the engine's Temporal runs in Docker)")
     add_repos(repos)
-    record_source()
     ensure_env_file()
     s = settings()
     for key, default in (("server_port", 7243), ("ui_port", 8243)):
@@ -508,26 +549,27 @@ def main(argv: list[str]) -> int:
     cmd, rest = argv[0], argv[1:]
     if cmd == "install":
         repos = [rest[i + 1] for i, a in enumerate(rest) if a == "--repo" and i + 1 < len(rest)]
-        with deploy_lock():
+        with deploy_lock("install"):
             return install(repos)
     if cmd == "upgrade":
-        with deploy_lock():
-            record_source()
+        with deploy_lock("upgrade"):
             server_up()
             for line in deploy():
                 print(f"factory engine: {line}")
         return 0
     if cmd == "start":
-        server_up()
-        for build in installed_builds():
-            if not _service_present(build):  # restarting a running worker would cancel its runs
-                start_worker(build, BUILDS / build, BUILDS / build / ".venv" / "bin" / "python")
+        with deploy_lock("start"):
+            server_up()
+            for build in installed_builds():
+                if not _service_present(build):  # restarting a running worker would cancel its runs
+                    start_worker(build, BUILDS / build, BUILDS / build / ".venv" / "bin" / "python")
         print("factory engine: started")
         return 0
     if cmd == "stop":
-        for build in installed_builds():
-            stop_worker(build)
-        compose("stop")
+        with deploy_lock("stop"):
+            for build in installed_builds():
+                stop_worker(build)
+            compose("stop")
         print("factory engine: stopped (history kept)")
         return 0
     if cmd == "build-id":

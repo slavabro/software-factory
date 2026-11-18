@@ -27,7 +27,7 @@ from temporalio.common import WorkerDeploymentVersion
 from temporalio.service import RPCError, RPCStatusCode
 
 from factory_runtime.temporal import get_run_failure
-from engine import schedules, settings as settings_mod
+from engine import schedules
 from engine.activities.teams import failures_in_a_row, wake
 from engine.factory import install
 from engine.models import TeamRef, Wake, WakeTeamInput, WakeTeamResult
@@ -157,7 +157,10 @@ class Signalled:
 # ---- the action log -----------------------------------------------------------------------------------------------
 
 def log_action(settings: EngineSettings, who: Who, action: str, target: str, before: Any, after: Any) -> Change:
+    """Append the change to the log; a no-op (before equals after) is returned but not logged."""
     change = Change(datetime.now(timezone.utc).isoformat(timespec="seconds"), who, action, target, before, after)
+    if before == after:
+        return change
     settings.state.mkdir(parents=True, exist_ok=True)
     with open(settings.state / ACTIONS_LOG, "a") as log:  # one write per line: appends never interleave
         log.write(json.dumps(asdict(change), default=str) + "\n")
@@ -165,10 +168,17 @@ def log_action(settings: EngineSettings, who: Who, action: str, target: str, bef
 
 
 def read_actions(settings: EngineSettings) -> list[Change]:
+    """The log's changes, oldest first; a line that isn't a whole change (a torn write, a hand edit) is skipped."""
     path = settings.state / ACTIONS_LOG
     if not path.is_file():
         return []
-    return [Change(**json.loads(line)) for line in path.read_text().splitlines() if line.strip()]
+    out = []
+    for line in path.read_text(errors="replace").splitlines():
+        try:
+            out.append(Change(**json.loads(line)))
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
 # ---- teams and repos ----------------------------------------------------------------------------------------------
@@ -348,9 +358,10 @@ async def resume(client: Client, settings: EngineSettings, ref: TeamRef, note: s
 
 async def run_now(client: Client, settings: EngineSettings, ref: TeamRef, who: Who = "cli") -> RunNow:
     """Wake the team by hand, past its schedule's pause. With the spend switch off the run stops before a session."""
+    # The switch as the run will read it, read before the wake so a broken file stops here, not after a run started.
+    unattended = bool(install.settings().get("unattended", EngineSettings.unattended))
     event = f"manual/{ref.workflow_id}/{uuid.uuid4()}"
     await wake(client, settings, WakeTeamInput(ref=ref, wake=Wake(reason="manual", event_id=event), bypass_pause=True))
-    unattended = settings_mod.load().unattended  # what the run itself will read
     change = log_action(settings, who, "run-now", ref.workflow_id, None, {"event_id": event})
     return RunNow(change, ref, unattended)
 
@@ -376,7 +387,9 @@ async def signal(client: Client, settings: EngineSettings, repo: str, reason: st
 
 async def reconcile(client: Client, settings: EngineSettings, who: Who = "cli") -> list[str]:
     report = await schedules.reconcile(client, settings)
-    log_action(settings, who, "reconcile", "schedules", None, report)
+    changed = [line for line in report if not line.startswith("updated ")]  # an update to the same spec is no change
+    if changed:
+        log_action(settings, who, "reconcile", "schedules", None, changed)
     return report
 
 
@@ -391,7 +404,7 @@ async def set_current(client: Client, settings: EngineSettings, build: str, who:
 
 def set_unattended(settings: EngineSettings, on: bool, who: Who = "cli") -> Change:
     """The spend switch. Off stops runs that have not started a session; a session already running finishes."""
-    before, after = install.set_setting("unattended", on, path=settings_mod.CONFIG_PATH)
+    before, after = install.set_setting("unattended", on)
     return log_action(settings, who, "spend", "unattended", before.get("unattended", EngineSettings.unattended),
                       after["unattended"])
 
@@ -408,7 +421,7 @@ async def add_repo(client: Client, settings: EngineSettings, path: str, who: Who
         raise OpError(f"{root} is not the top of a git checkout")
     _, name, _ = _committed(str(root), fetch=True)
     entry = install.repo_entry(path)
-    before, after = install.add_repos([path], path=settings_mod.CONFIG_PATH)
+    before, after = install.add_repos([path])
     report = await reconcile(client, replace(settings, repos=tuple(after.get("repos", ()))), who)
     change = log_action(settings, who, "add-repo", entry, before.get("repos", []), after.get("repos", []))
     return RepoChange(change, entry, name, report, unchanged=before == after)
@@ -422,7 +435,7 @@ async def remove_repo(client: Client, settings: EngineSettings, path: str, who: 
     except Exception:  # noqa: BLE001 — a deleted or broken checkout can still be removed
         name = root.name
     try:
-        before, after = install.remove_repo(path, path=settings_mod.CONFIG_PATH)
+        before, after = install.remove_repo(path)
     except KeyError as e:
         raise OpError(e.args[0]) from e
     entry = next(r for r in before.get("repos", []) if r not in after.get("repos", []))

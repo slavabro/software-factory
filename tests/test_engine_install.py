@@ -28,6 +28,7 @@ class EngineInstallTest(unittest.TestCase):
             "CONFIG_DIR": self.tmp / "config", "SHARE": self.tmp / "share", "BUILDS": self.tmp / "share" / "builds",
             "CURRENT": self.tmp / "share" / "current", "ENV_FILE": self.tmp / "config" / "engine.env",
             "SETTINGS": self.tmp / "config" / "engine.toml", "DEPLOY_LOCK": self.tmp / "share" / "deploy.lock",
+            "SOURCE": self.tmp / "share" / "source",
         }
         for name, value in patches.items():
             p = mock.patch.object(engine, name, value)
@@ -74,8 +75,21 @@ class EngineInstallTest(unittest.TestCase):
 
     def test_set_a_key_and_odd_strings_round_trip(self):
         engine.set_setting("desk_port", 9000)
-        engine.set_setting("source", 'C:\\a "quoted"\npath')
-        self.assertEqual(engine.settings(), {"desk_port": 9000, "source": 'C:\\a "quoted"\npath'})
+        engine.set_setting("server_host", 'C:\\a "quoted"\nhost')
+        self.assertEqual(engine.settings(), {"desk_port": 9000, "server_host": 'C:\\a "quoted"\nhost'})
+        with self.assertRaises(TypeError):
+            engine.set_setting("ratio", 0.5)  # type: ignore[arg-type]
+        self.assertNotIn("ratio", engine.settings())
+
+    def test_a_symlinked_settings_file_is_written_through_the_link(self):
+        real = self.tmp / "dotfiles" / "engine.toml"
+        real.parent.mkdir()
+        real.write_text("unattended = true\n")
+        engine.CONFIG_DIR.mkdir(parents=True)
+        engine.SETTINGS.symlink_to(real)
+        engine.set_setting("unattended", False)
+        self.assertTrue(engine.SETTINGS.is_symlink())
+        self.assertEqual(real.read_text(), "unattended = false\n")
 
     def test_the_settings_write_is_atomic_and_keeps_the_file_mode(self):
         engine.add_repos(["~/a"])
@@ -101,28 +115,71 @@ class EngineInstallTest(unittest.TestCase):
         self.assertEqual(engine.home_form(Path.home() / "Dev" / "software-factory"), "~/Dev/software-factory")
         self.assertEqual(engine.home_form(Path("/opt/factory")), str(Path("/opt/factory").resolve()))
 
-    def test_upgrade_records_its_checkout_as_the_source_and_holds_the_deploy_lock(self):
+    def test_upgrade_holds_the_deploy_lock_and_says_who_holds_it(self):
         held = []
         with mock.patch.object(engine, "server_up"), \
              mock.patch.object(engine, "deploy", lambda: held.append(engine.deploy_running()) or []):
             self.assertEqual(engine.main(["upgrade"]), 0)
-        self.assertEqual(engine.settings()["source"], engine.home_form(engine.FACTORY))
-        self.assertTrue(held[0].startswith(f"pid {os.getpid()} "))
+        self.assertTrue(held[0].startswith(f"upgrade (pid {os.getpid()}) since "))
         self.assertIsNone(engine.deploy_running())  # released when it ends
+        self.assertNotIn("source", engine.settings())  # never in engine.toml: older builds would refuse the key
+
+    def test_a_deploy_records_the_source_once_its_build_is_current(self):
+        order = []
+
+        def cli(python, *args, capture=False):
+            order.append((args[0], engine.recorded_source()))
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        with mock.patch.object(engine, "snapshot", return_value=("b1", self.tmp / "b1")), \
+             mock.patch.object(engine, "ensure_venv", return_value=self.tmp / "py"), \
+             mock.patch.object(engine, "_service_present", return_value=True), \
+             mock.patch.object(engine, "current_build", return_value="b1"), \
+             mock.patch.object(engine, "engine_cli", cli), mock.patch.object(engine, "retire", return_value=[]):
+            engine.deploy()
+        self.assertEqual(order[0], ("set-current", None))  # not yet: the build is not current
+        self.assertEqual(engine.recorded_source(), engine.home_form(engine.main_worktree(engine.FACTORY)))
+
+    def test_the_source_is_the_main_worktree_never_a_linked_one(self):
+        repo = self.checkout()
+        linked = self.tmp / "agent-worktree"
+        git("worktree", "add", "-q", "-b", "agent", str(linked), cwd=repo)
+        self.assertEqual(engine.main_worktree(linked), repo.resolve())
+        engine.record_source(linked)
+        self.assertEqual(engine.recorded_source(), engine.home_form(repo))
+        self.assertEqual(engine.main_worktree(self.tmp), self.tmp.resolve())  # not a checkout: itself
+
+    def test_a_holder_that_died_is_not_running(self):
+        engine.SHARE.mkdir(parents=True)
+        dead = subprocess.run([sys.executable, "-c", "import os; print(os.getpid())"], capture_output=True, text=True)
+        engine.DEPLOY_LOCK.write_text(f"upgrade (pid {dead.stdout.strip()}) since then\n")
+        self.assertIsNone(engine.deploy_running())
+        with engine.deploy_lock("upgrade"):  # and the lock itself is free
+            pass
+
+    def test_start_and_stop_are_refused_while_a_deploy_runs(self):
+        with engine.deploy_lock("upgrade"):
+            for cmd in ("start", "stop"):
+                with mock.patch.object(engine, "server_up") as up, mock.patch.object(engine, "compose") as comp, \
+                     self.assertRaises(SystemExit) as caught:
+                    engine.main([cmd])
+                up.assert_not_called()
+                comp.assert_not_called()
+                self.assertIn("upgrade (pid", str(caught.exception))
 
     def test_a_second_deploy_is_refused_while_one_runs(self):
-        with engine.deploy_lock():
+        with engine.deploy_lock("upgrade"):
             with mock.patch.object(engine, "server_up") as up, self.assertRaises(SystemExit) as caught:
                 engine.main(["upgrade"])
             up.assert_not_called()
-            self.assertIn("another deploy is running (pid", str(caught.exception))
+            self.assertIn(f"upgrade (pid {os.getpid()}) since", str(caught.exception))
             # Another process sees it too (flock is per open file, and goes with its holder).
             probe = subprocess.run([sys.executable, "-c", (
                 "import fcntl, os, sys; fd = os.open(sys.argv[1], os.O_RDWR)\n"
                 "try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(3)"),
                 str(engine.DEPLOY_LOCK)])
             self.assertEqual(probe.returncode, 3)
-        with engine.deploy_lock():  # free again
+        with engine.deploy_lock("upgrade"):  # free again
             pass
 
     def test_the_database_password_is_made_once_and_private(self):

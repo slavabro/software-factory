@@ -36,7 +36,7 @@ class Isolated:
         tmp = tempfile.TemporaryDirectory()
         case.addCleanup(tmp.cleanup)
         base = Path(tmp.name)
-        for target, name, value in ((settings_mod, "CONFIG_PATH", base / "engine.toml"),
+        for target, name, value in ((install, "SETTINGS", base / "engine.toml"),
                                     (install, "BUILDS", base / "builds"), (install, "CURRENT", base / "current")):
             patch = mock.patch.object(target, name, value)
             patch.start()
@@ -55,7 +55,7 @@ class OpsServerTest(unittest.IsolatedAsyncioTestCase, Isolated):
         self.repo, self.state, tmp = make_repo("true")
         self.addCleanup(tmp.cleanup)
         self.addCleanup(os.environ.pop, "FACTORY_ENGINE_STATE", None)
-        settings_mod.CONFIG_PATH.write_text(f'repos = ["{self.repo}"]\ntime_zone = "UTC"\n')
+        install.SETTINGS.write_text(f'repos = ["{self.repo}"]\ntime_zone = "UTC"\n')
         self.settings = settings_mod.load()
         self.ref = TeamRef(repo=str(self.repo.resolve()), repo_name="demo", team="qa")
 
@@ -136,8 +136,7 @@ class OpsServerTest(unittest.IsolatedAsyncioTestCase, Isolated):
         snap = await ops.snapshot(self.client, self.settings)
         (run,) = snap.recent_runs
         self.assertEqual((run.repo_name, run.team, run.status, run.outcome), ("demo", "qa", "completed", "done"))
-        self.assertTrue(cli.run_line(run).startswith("team/demo/qa: completed "))
-        self.assertIn(" — done: ", cli.run_line(run))
+        self.assertTrue(cli.run_line(run).startswith("team/demo/qa: ✓ Done "))
 
     async def test_a_terminated_run_shows_why(self):
         await ops.run_now(self.client, self.settings, self.ref)
@@ -146,6 +145,7 @@ class OpsServerTest(unittest.IsolatedAsyncioTestCase, Isolated):
         (run,) = snap.recent_runs
         self.assertEqual((run.status, run.outcome), ("terminated", None))
         self.assertIn("The run was terminated", run.failure or "")
+        self.assertTrue(cli.run_line(run).startswith("team/demo/qa: ✕ Terminated "))
 
     async def test_remove_then_add_a_repo(self):
         await ops.reconcile(self.client, self.settings)
@@ -168,6 +168,10 @@ class OpsServerTest(unittest.IsolatedAsyncioTestCase, Isolated):
                          [("cli", "remove-repo"), ("desk", "add-repo")])
         self.assertEqual(log[-1].after, [str(self.repo.resolve())])
 
+        again = await ops.add_repo(self.client, settings_mod.load(), str(self.repo))
+        self.assertTrue(again.unchanged)
+        self.assertEqual(len(self.actions()), len(log))  # nothing changed, nothing logged
+
     async def test_a_repo_without_a_factory_toml_on_its_default_branch_is_not_added(self):
         other, _, tmp = make_repo("true")
         self.addCleanup(tmp.cleanup)
@@ -187,7 +191,7 @@ class OpsServerTest(unittest.IsolatedAsyncioTestCase, Isolated):
         with contextlib.redirect_stdout(out):
             await cli.cmd_status(self.client, self.settings, cli.parser().parse_args(["status"]))
         lines = out.getvalue().splitlines()
-        self.assertTrue(any(line.startswith(f"schedule/demo/qa: PAUSED ({schedules.NEW_NOTE}), next ") for line in lines))
+        self.assertTrue(any(line.startswith(f"schedule/demo/qa: ‖ Paused ({schedules.NEW_NOTE}), next ") for line in lines))
 
 
 class SpendSwitchCliTest(unittest.TestCase, Isolated):
@@ -208,7 +212,7 @@ class SpendSwitchCliTest(unittest.TestCase, Isolated):
             self.assertTrue(settings_mod.load().unattended)
             log = [json.loads(line) for line in (Path(state.name) / ops.ACTIONS_LOG).read_text().splitlines()]
         self.assertEqual([(e["who"], e["action"], e["before"], e["after"]) for e in log],
-                         [("cli", "spend", True, False), ("cli", "spend", False, False), ("cli", "spend", False, True)])
+                         [("cli", "spend", True, False), ("cli", "spend", False, True)])  # the no-op is not logged
 
 
 def asyncio_run(coro):  # type: ignore[no-untyped-def]
@@ -216,13 +220,26 @@ def asyncio_run(coro):  # type: ignore[no-untyped-def]
 
 
 class SettingsKeysTest(unittest.TestCase):
-    def test_the_desk_port_and_source_have_defaults_and_load(self):
-        self.assertEqual((EngineSettings().desk_port, EngineSettings().source), (8245, ""))
+    def test_the_desk_port_has_a_default_and_loads(self):
+        self.assertEqual(EngineSettings().desk_port, 8245)
         with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
-            f.write('desk_port = 9000\nsource = "~/Dev/software-factory"\n')
+            f.write("desk_port = 9000\n")
         self.addCleanup(os.unlink, f.name)
-        loaded = settings_mod.load(Path(f.name))
-        self.assertEqual((loaded.desk_port, loaded.source), (9000, "~/Dev/software-factory"))
+        self.assertEqual(settings_mod.load(Path(f.name)).desk_port, 9000)
+
+    def test_the_settings_path_has_one_owner(self):
+        with mock.patch.object(install, "SETTINGS", Path("/elsewhere/engine.toml")):
+            self.assertEqual(settings_mod.config_path(), Path("/elsewhere/engine.toml"))
+
+    def test_a_corrupt_log_line_is_skipped(self):
+        state = tempfile.TemporaryDirectory()
+        self.addCleanup(state.cleanup)
+        settings = EngineSettings(state=Path(state.name))
+        ops.log_action(settings, "cli", "spend", "unattended", True, False)
+        with open(Path(state.name) / ops.ACTIONS_LOG, "a") as log:
+            log.write('{"time": "torn\n[1, 2]\n')
+        ops.log_action(settings, "desk", "spend", "unattended", False, True)
+        self.assertEqual([c.who for c in ops.read_actions(settings)], ["cli", "desk"])
 
 
 if __name__ == "__main__":

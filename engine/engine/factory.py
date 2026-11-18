@@ -12,5 +12,6 @@ if str(PLUGIN) not in sys.path:
 
 from sfactory import config, runner  # noqa: E402
 from sfactory import engine as install  # noqa: E402
+from sfactory import status  # noqa: E402
 
-__all__ = ["config", "install", "runner"]
+__all__ = ["config", "install", "runner", "status"]

@@ -21,6 +21,7 @@ from engine import process
 from engine import settings as settings_mod
 from engine.activities import agent, repo as repo_acts
 from engine.activities.teams import TeamActivities, team_dir
+from engine.factory import install
 from engine.models import OutcomeInput, ResolveInput, StepInput, TeamRef
 from engine.activities.agent import slept_marker
 from engine.settings import EngineSettings
@@ -342,7 +343,7 @@ class SpendSwitchTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
             f.write("unattended = false\n")
         self.addCleanup(os.unlink, f.name)
-        with mock.patch.object(settings_mod, "CONFIG_PATH", Path(f.name)):
+        with mock.patch.object(install, "SETTINGS", Path(f.name)):
             self.assertEqual((await ActivityEnvironment().run(acts.check_budget, ref)).verdict, "stop")
             Path(f.name).write_text("unattended = true\n")
             self.assertEqual((await ActivityEnvironment().run(acts.check_budget, ref)).verdict, "go")

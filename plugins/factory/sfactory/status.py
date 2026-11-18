@@ -7,7 +7,7 @@ them. Pages (the Factory Desk, the costs page) take `mark()` and the stylesheet 
 States:
 
     done · failed · interrupted · skipped     how a team run ended (engine.models.Outcome)
-    running                                    a team run that is open now
+    running · continued                        a team run open now; one that went on as a new run
     active · paused                            a team's schedule
     within · approaching · near · over         a budget against its limit (F-33's states, same keys)
     unknown                                    not known (a read failed, a state not seen before)
@@ -28,6 +28,7 @@ _TRIANGLE = ('<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2
              '<path d="M12 9v4"/><path d="M12 17h.01"/>')
 _MOON = '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>'
 _SKIP = _CIRCLE + '<path d="M8 12h8"/><path d="m12 8 4 4-4 4"/>'
+_ONWARD = '<path d="m15 10 5 5-5 5"/><path d="M4 4v7a4 4 0 0 0 4 4h12"/>'
 _PLAY = _CIRCLE + '<path d="m10 8 6 4-6 4Z"/>'
 _CLOCK = _CIRCLE + '<path d="M12 6v6l4 2"/>'
 _PAUSE = _CIRCLE + '<path d="M10 15V9"/><path d="M14 15V9"/>'
@@ -49,6 +50,7 @@ STATUSES: dict[str, Status] = {s.key: s for s in (
     Status("interrupted", "Interrupted", "☾", ATTENTION, _MOON),  # the machine slept through the run's budget
     Status("skipped", "Skipped", "»", NEUTRAL, _SKIP),
     Status("running", "Running", "▶", INFO, _PLAY),
+    Status("continued", "Continued", "↪", NEUTRAL, _ONWARD),  # continued as new: its wakes went on in the next run
     Status("active", "Active", "◷", NEUTRAL, _CLOCK),
     Status("paused", "Paused", "‖", ATTENTION, _PAUSE),
     Status("within", "Within budget", "✓", NEUTRAL, _CHECK),
