@@ -1,22 +1,29 @@
 """The Factory Desk's server (docs/designs/desk.md, "The desk itself" and "Safety").
 
 A standard-library `ThreadingHTTPServer` on 127.0.0.1 that renders each page on the server from fresh reads. The
-Temporal client lives on one asyncio loop in a background thread; request threads hand it coroutines with
-`run_coroutine_threadsafe`. Only GET, and only these pages; the actions come with build order step 2.
+Temporal client lives on one asyncio loop in a background thread, and only Temporal calls run there; request threads
+hand it coroutines with `run_coroutine_threadsafe`. Only GET, and only these pages; the actions come with build
+order step 2.
 
-Every request, reads included, passes three checks before anything is read:
+Every request, reads included, passes these checks before anything is read:
 
 - **Host** is `localhost:<port>` or `127.0.0.1:<port>` (defeats DNS rebinding).
-- **Token**: the first visit carries `?token=` (the URL `factory engine status` prints); it is traded for an
-  HttpOnly, SameSite=Strict cookie and a redirect to the URL without it. Every other request needs that cookie.
-- Responses carry CSP `default-src 'self'` and no CORS headers; logs and notebooks are served by team and run ID,
-  never by a path the client gives.
+- **Token**: the first visit carries `?token=` (the link `factory engine desk` prints); it is traded for an
+  HttpOnly, SameSite=Strict cookie and a redirect to the URL without it. The cookie holds a value derived from the
+  token, never the token: cookies are not scoped by port, so every other app on localhost receives it.
+- Responses carry CSP `default-src 'self'` and no CORS headers; logs and notebooks are found from team and run IDs
+  looked up among the configured teams, never from a path the client gives.
+
+Every response carries `X-Factory-Desk`, so `factory engine status` can tell the desk from another program on its
+port (`probe`).
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
+import http.client
 import re
 import sys
 import threading
@@ -25,10 +32,9 @@ from concurrent.futures import Future
 from concurrent.futures import TimeoutError as FutureTimeout
 from dataclasses import dataclass, field
 from datetime import timedelta
-from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, TypeVar, cast
+from typing import Any, Literal, TypeVar, cast
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 from temporalio.client import Client
@@ -46,23 +52,65 @@ T = TypeVar("T")
 
 CONNECT_TIMEOUT = 5.0  # seconds to reach the engine's Temporal server
 READ_TIMEOUT = 60.0  # seconds a page's reads may take
+REQUEST_TIMEOUT = 30  # seconds a client may take to send its request
 TEXT_LIMIT = 512 * 1024  # a log or notebook shows its last this many bytes
-TOKEN_MAX_AGE = 30 * 24 * 3600
+COOKIE_MAX_AGE = 30 * 24 * 3600
+MARKER = "X-Factory-Desk"
 HEADERS = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "no-referrer",
     "Cache-Control": "no-store",
+    MARKER: "1",
 }
-TEAM_ID = re.compile(r"team/[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)+")
 RUN_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-REFUSED = ("This is the Factory Desk. Open it with the URL that `factory engine status` prints on its `desk:` line; "
-           "the link signs this browser in.\n")
+SECRET = re.compile(r"(token=)[^&\s'\"]*")
+REFUSED = ("This is the Factory Desk. Open it with the link `factory engine desk` prints (`factory engine desk --open` "
+           "opens it); the link signs this browser in.\n")
 
 
-def url(settings: EngineSettings, token: str | None = None) -> str:
-    """The desk's URL with its token: what `factory engine status` prints."""
-    return f"http://localhost:{settings.desk_port}/?" + urlencode({"token": token or install.desk_token()})
+def base_url(port: int) -> str:
+    return f"http://localhost:{port}/"
+
+
+def signed_url(port: int, token: str) -> str:
+    """The link that signs a browser in: what `factory engine desk` prints."""
+    return base_url(port) + "?" + urlencode({"token": token})
+
+
+def cookie_value(token: str) -> str:
+    """What the cookie holds: derived from the token, so an app on another localhost port that receives the cookie
+    still can't make the sign-in link."""
+    return hmac.new(token.encode(), b"desk-cookie", hashlib.sha256).hexdigest()
+
+
+def cookie_named(header: str | None, name: str) -> str | None:
+    """The cookie `name` from a Cookie header, parsed by hand: other localhost apps' cookies (JSON values, spaces,
+    stray quotes) must not hide the desk's, as they would from http.cookies."""
+    for part in (header or "").split(";"):
+        key, sep, value = part.partition("=")
+        if sep and key.strip() == name:
+            return value.strip()
+    return None
+
+
+DeskState = Literal["up", "not running", "port held by something else"]
+
+
+def probe(port: int, timeout: float = 2.0) -> DeskState:
+    """Whether the desk answers on `port`: an unauthenticated request it refuses, recognised by its header."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request("GET", "/", headers={"Host": f"localhost:{port}"})
+        resp = conn.getresponse()
+        resp.read()
+        return "up" if resp.getheader(MARKER) == "1" else "port held by something else"
+    except ConnectionRefusedError:
+        return "not running"
+    except (OSError, http.client.HTTPException):
+        return "port held by something else"
+    finally:
+        conn.close()
 
 
 @dataclass
@@ -82,9 +130,9 @@ def _short(error: BaseException) -> str:
     return text.splitlines()[0][:300]
 
 
-def valid_team_id(team_id: str) -> bool:
-    return len(team_id) <= 300 and TEAM_ID.fullmatch(team_id) is not None and \
-        not any(part in (".", "..") for part in team_id.split("/"))
+def plausible_team_id(team_id: str) -> bool:
+    """Worth looking up: the lookup among the configured teams (`ops.find_team`) is the real check."""
+    return team_id.startswith("team/") and len(team_id) <= 500
 
 
 class Desk:
@@ -101,6 +149,8 @@ class Desk:
     def close(self) -> None:
         self.loop.call_soon_threadsafe(self.loop.stop)
         self._thread.join(timeout=5)
+        if not self._thread.is_alive():
+            self.loop.close()
 
     # ---- reads on the Temporal loop -----------------------------------------------------------------------------
 
@@ -125,11 +175,21 @@ class Desk:
             return pages.Live(None, _short(e), reachable=False)
         try:
             snap = await ops.snapshot(client, settings, recent)
-            pollers = await ops.pollers(client)
-            runs = {wid: tuple(await ops.recent_runs(client, n, wid)) for wid, n in team_runs(snap).items()}
-        except Exception as e:  # noqa: BLE001 — one failed read must not fail the page
+        except Exception as e:  # noqa: BLE001 — the page says why there are no teams or runs
             return pages.Live(None, _short(e))
-        return pages.Live(snap, pollers=pollers, team_runs=runs)
+        # The rest is secondary: each read that fails shows as unknown with its reason, the snapshot stays.
+        try:
+            pollers: dict[str, Any] | None = await ops.pollers(client)
+            pollers_error = ""
+        except Exception as e:  # noqa: BLE001
+            pollers, pollers_error = None, _short(e)
+        runs, errors = {}, {}
+        for wid, n in team_runs(snap).items():
+            try:
+                runs[wid] = tuple(await ops.recent_runs(client, n, wid))
+            except Exception as e:  # noqa: BLE001
+                errors[wid] = _short(e)
+        return pages.Live(snap, pollers=pollers, pollers_error=pollers_error, team_runs=runs, team_runs_errors=errors)
 
     def live(self, settings: EngineSettings, recent: int = 0,
              team_runs: Callable[[ops.EngineSnapshot], dict[str, int]] = lambda _: {}) -> pages.Live:
@@ -146,11 +206,13 @@ class Desk:
 
     def handle(self, method: str, target: str, host: str | None, cookie: str | None, port: int) -> Response:
         if host not in (f"localhost:{port}", f"127.0.0.1:{port}"):
-            return refused(403, "Factory Desk: this host name is not served here; use the URL `factory engine "
-                                "status` prints.\n")
+            return refused(403, "Factory Desk: this host name is not served here; use the link `factory engine "
+                                "desk` prints.\n")
+        token = install.read_desk_token()  # only read: a request never makes the token
+        if token is None:
+            return refused(403, "Factory Desk: there is no desk token yet; `factory engine desk` makes one.\n")
         parts = urlsplit(target)
         query = parse_qs(parts.query, keep_blank_values=True)
-        token = install.desk_token()
         name = f"factory_desk_{port}"
         if "token" in query:
             if not hmac.compare_digest(query["token"][-1].encode(), token.encode()):
@@ -160,9 +222,11 @@ class Desk:
             clean = parts.path + ("?" + urlencode(rest, doseq=True) if rest else "")
             return Response(303, "", headers={
                 "Location": clean,
-                "Set-Cookie": f"{name}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={TOKEN_MAX_AGE}",
+                "Set-Cookie": f"{name}={cookie_value(token)}; HttpOnly; SameSite=Strict; Path=/; "
+                              f"Max-Age={COOKIE_MAX_AGE}",
             })
-        if not self._signed_in(cookie, name, token):
+        sent = cookie_named(cookie, name)
+        if sent is None or not hmac.compare_digest(sent.encode(), cookie_value(token).encode()):
             return refused(403, REFUSED)
         if method != "GET":
             return Response(405, "", "text/plain; charset=utf-8", {"Allow": "GET"})
@@ -173,16 +237,8 @@ class Desk:
         args = {k: v[-1] for k, v in query.items()}
         return self.page(parts.path, args, settings)
 
-    @staticmethod
-    def _signed_in(header: str | None, name: str, token: str) -> bool:
-        if not header:
-            return False
-        try:
-            jar = SimpleCookie(header)
-        except CookieError:
-            return False
-        morsel = jar.get(name)
-        return morsel is not None and hmac.compare_digest(morsel.value.encode(), token.encode())
+    def find_team(self, settings: EngineSettings, team_id: str) -> ops.TeamView | None:
+        return ops.find_team(settings, team_id) if plausible_team_id(team_id) else None
 
     def page(self, path: str, args: dict[str, str], settings: EngineSettings) -> Response:
         if path == "/desk.css":
@@ -200,7 +256,7 @@ class Desk:
             return Response(200, pages.engine_page(settings, live, install.source_head(), install.deploy_running()))
         if path == "/team":
             team_id = args.get("id", "")
-            team = ops.find_team(settings, team_id) if valid_team_id(team_id) else None
+            team = self.find_team(settings, team_id)
             live = self.live(settings, team_runs=lambda _: {team_id: pages.TEAM_RUNS} if team else {})
             if team is not None and live.snap is not None:  # the snapshot's view carries its schedule's state
                 team = next((t for r in live.snap.repos for t in r.teams if t.ref.workflow_id == team_id), team)
@@ -212,18 +268,23 @@ class Desk:
     def text(self, path: str, args: dict[str, str], settings: EngineSettings) -> Response:
         """A run's log or a team's notebook, found from the team's ID (and the run's), never from a client path."""
         team_id, run_id = args.get("team", ""), args.get("run", "")
-        team = ops.find_team(settings, team_id) if valid_team_id(team_id) else None
+        team = self.find_team(settings, team_id)
         if team is None or (path == "/log" and RUN_ID.fullmatch(run_id) is None):
             return Response(404, pages.message_page(settings, "Not found", "No such team or run."))
         back = pages.team_url(team_id)
         if path == "/log":
             file, home, title = run_log(settings, team.ref, run_id), team_logs(settings, team.ref), f"Log of run {run_id[:8]}"
+            within = settings.state / "logs"
             missing = "This run wrote no log: a run that stops before its session starts writes none."
         else:
             file, home, title = team_dir(settings, team.ref) / "notebook.md", team_dir(settings, team.ref), "Notebook"
+            within = settings.state / "teams"
             missing = "This team's notebook is empty: each finished run adds an entry."
         heading = f"{team.ref.repo_name} · {team.ref.team} · {title}"
-        if file is None or not file.is_file() or not file.resolve().is_relative_to(home.resolve()):
+        # The team's own directory must be under the state's (a name from a repo's config could hold `..`), and the
+        # file under the team's (a symlink must not lead out).
+        inside = home.resolve().is_relative_to(within.resolve())
+        if not inside or file is None or not file.is_file() or not file.resolve().is_relative_to(home.resolve()):
             return Response(200, pages.text_page(settings, heading, back, "", missing))
         size = file.stat().st_size
         with open(file, "rb") as f:
@@ -237,6 +298,7 @@ class Handler(BaseHTTPRequestHandler):
     desk: Desk
     server_version = "FactoryDesk"
     sys_version = ""
+    timeout = REQUEST_TIMEOUT  # a client that never finishes its request doesn't hold a thread for ever
 
     def _serve(self) -> None:
         port = cast(ThreadingHTTPServer, self.server).server_port
@@ -258,6 +320,10 @@ class Handler(BaseHTTPRequestHandler):
         """Only failures, and never the query (a first visit carries the token)."""
         if str(code).isdigit() and int(code) >= 500:
             sys.stderr.write(f"factory desk: {self.command} {urlsplit(self.path).path} {code}\n")
+
+    def log_message(self, format: str, *args: Any) -> None:
+        """Errors (log_error) only; anything that could quote the request line has its token blanked."""
+        sys.stderr.write("factory desk: " + SECRET.sub(r"\1…", format % args) + "\n")
 
 
 def make_server(desk: Desk, port: int) -> ThreadingHTTPServer:

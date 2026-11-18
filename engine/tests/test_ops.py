@@ -193,6 +193,10 @@ class OpsServerTest(unittest.IsolatedAsyncioTestCase, Isolated):
             await cli.cmd_status(self.client, self.settings, cli.parser().parse_args(["status"]))
         lines = out.getvalue().splitlines()
         self.assertTrue(any(line.startswith(f"schedule/demo/qa: ‖ Paused ({schedules.NEW_NOTE}), next ") for line in lines))
+        desk = next(line for line in lines if line.startswith("desk: "))
+        self.assertIn(f"http://localhost:{self.settings.desk_port}/ — ", desk)
+        self.assertNotIn("token", desk)  # the sign-in link is `factory engine desk`'s alone
+        self.assertFalse(install.DESK_TOKEN.exists())  # status never makes the token
 
 
 class SpendSwitchCliTest(unittest.TestCase, Isolated):

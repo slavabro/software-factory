@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import os
 import stat
 import subprocess
@@ -191,12 +193,19 @@ class EngineInstallTest(unittest.TestCase):
         self.assertEqual(stat.S_IMODE(engine.ENV_FILE.stat().st_mode), 0o600)
 
     def test_the_desk_token_is_made_once_and_private(self):
+        self.assertIsNone(engine.read_desk_token())  # reading never makes it
+        self.assertFalse(engine.DESK_TOKEN.exists())
         token = engine.desk_token()
         self.assertEqual(engine.desk_token(), token)
         self.assertGreaterEqual(len(token), 40)
         self.assertEqual(engine.DESK_TOKEN.parent, engine.CONFIG_DIR)
         self.assertEqual(stat.S_IMODE(engine.DESK_TOKEN.stat().st_mode), 0o600)
         engine.DESK_TOKEN.chmod(0o644)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            self.assertEqual(engine.read_desk_token(), token)  # a loose mode is repaired, and said
+        self.assertEqual(stat.S_IMODE(engine.DESK_TOKEN.stat().st_mode), 0o600)
+        self.assertIn("made it 0600", err.getvalue())
         engine.DESK_TOKEN.write_text("")  # emptied by hand: a new token, private again
         fresh = engine.desk_token()
         self.assertNotEqual(fresh, token)

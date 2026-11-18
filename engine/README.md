@@ -6,7 +6,8 @@ standard-library runner (`plugins/factory/sfactory`), so it runs from the factor
 
 ```sh
 factory engine install --repo ~/Dev/FamilyOffice     # Docker project, this build's worker, schedules
-factory engine status                                # schedules, running teams, recent runs, the desk's URL
+factory engine status                                # schedules, running teams, recent runs, whether the desk is up
+factory engine desk --open                           # sign this browser in to the Factory Desk
 factory engine run-now --repo ~/Dev/FamilyOffice --team upgrade
 factory engine spend off                             # the spend switch: no new agent session starts
 factory engine repo add ~/Dev/OtherRepo              # needs a .factory.toml on its default branch; reconciles

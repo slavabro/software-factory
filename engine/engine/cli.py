@@ -7,6 +7,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import subprocess
 import sys
 from datetime import datetime
 from typing import Awaitable, Callable
@@ -90,8 +91,34 @@ async def cmd_status(client: Client, settings: EngineSettings, a: argparse.Names
         print(run_line(run))
     if not snap.settings.unattended:
         print(f"spend switch: {status.text('paused', 'Off')} — no team starts an agent session (factory engine spend on)")
-    answering = install.port_taken(settings.desk_port)
-    print(f"desk: {desk.url(settings)}" + ("" if answering else " (not running: python -m engine.desk serves it)"))
+    print(desk_line(settings))
+    return 0
+
+
+def desk_line(settings: EngineSettings) -> str:
+    """The desk's address and whether it answers there; never the token (`factory engine desk` prints the link)."""
+    state = desk.probe(settings.desk_port)
+    hint = {"up": "up; `factory engine desk` prints the sign-in link",
+            "not running": "not running (python -m engine.desk serves it)",
+            "port held by something else": "port held by something else (set desk_port in engine.toml)"}[state]
+    return f"desk: {desk.base_url(settings.desk_port)} — {hint}"
+
+
+def cmd_desk(settings: EngineSettings, a: argparse.Namespace) -> int:
+    """The link that signs a browser in to the desk (makes the token the first time); --open opens it."""
+    link = desk.signed_url(settings.desk_port, install.desk_token())
+    if a.open:
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        try:
+            subprocess.run([opener, link], check=True, capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise SystemExit(f"factory engine: could not open the desk with {opener} ({e}); open the link by hand")
+        print(f"opened the desk ({desk.base_url(settings.desk_port)})")
+    else:
+        print(link)
+    state = desk.probe(settings.desk_port)
+    if state != "up":
+        print(f"the desk is {state} on port {settings.desk_port}", file=sys.stderr)
     return 0
 
 
@@ -162,6 +189,8 @@ def parser() -> argparse.ArgumentParser:
     st.add_argument("--recent", type=int, default=10)
     sp = sub.add_parser("spend", help="the spend switch: off stops new agent sessions, a running one finishes")
     sp.add_argument("state", choices=["on", "off"])
+    dk = sub.add_parser("desk", help="print the link that signs a browser in to the Factory Desk")
+    dk.add_argument("--open", action="store_true", help="open it in the browser instead of printing it")
     rp = sub.add_parser("repo", help="add or remove a repo the engine runs teams for")
     rp.add_argument("action", choices=["add", "remove"])
     rp.add_argument("path")
@@ -188,6 +217,8 @@ async def run(argv: list[str]) -> int:
     try:
         if a.command == "spend":  # a file change: works while the server is down
             return cmd_spend(settings, a)
+        if a.command == "desk":  # the token file and a local probe: no server needed
+            return cmd_desk(settings, a)
         client = await get_client(settings.temporal)
         return await COMMANDS[a.command](client, settings, a)
     except ops.OpError as e:

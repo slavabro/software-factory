@@ -91,16 +91,24 @@ The desk can spend money and deploy, so:
 
 - It binds to 127.0.0.1 and answers only `Host: localhost:<port>` or `127.0.0.1:<port>`, which defeats DNS
   rebinding.
-- **Token.** A random token lives in a 0600 file under `~/.config/software-factory`. `factory engine status` prints
-  the desk's URL with the token. The first visit trades it for an HttpOnly, SameSite=Strict cookie and redirects to
-  a URL without it. Every request, reads included, needs the cookie, because pages show repo paths, summaries and
-  logs.
-- **Every POST** must also carry a matching `Origin` and a form token. The desk sends no CORS headers and serves CSP
-  `default-src 'self'`.
+- **Token.** A random token lives in a 0600 file under `~/.config/software-factory` (a looser mode is set back to
+  0600). Only the desk's startup and `factory engine desk` make it; a request never does. `factory engine desk`
+  prints the sign-in link with the token (`--open` opens it); `factory engine status` prints only the desk's address
+  and whether the desk answers there (it recognises the desk by its `X-Factory-Desk` header, so another program on
+  the port is reported as such). The first visit trades the token for an HttpOnly, SameSite=Strict cookie and
+  redirects to a URL without it. The cookie holds HMAC(token, "desk-cookie"), never the token. Every request, reads
+  included, needs the cookie, because pages show repo paths, summaries and logs. The Cookie header is parsed by
+  hand, so another localhost app's malformed cookie can't hide the desk's.
+- **Every POST** must also carry a form token and an `Origin` that equals the desk's own exactly: scheme, host and
+  port (`http://localhost:<port>` or `http://127.0.0.1:<port>`), because SameSite treats every port on localhost as
+  the same site. The desk sends no CORS headers and serves CSP `default-src 'self'`.
 - **Untrusted text.** Agent-written text (summaries, failure notes, logs) comes from agents that read untrusted PR
   text, so all of it is escaped. Logs and notebooks are served by run or team ID, never by a client-given path.
 - **What it can't promise.** Temporal's own frontend (7243) and UI (8243) take connections from any local process
-  without auth. The desk does not make the machine safe from other local users, and the doc says so.
+  without auth. The desk does not make the machine safe from other local users, and the doc says so. Cookies are
+  not scoped by port, so every other app served on localhost receives the desk's cookie (the derived value, not
+  the token), and SameSite=Strict does not separate one localhost port from another. The sign-in link with
+  `?token=` stays in the browser's history.
 - **Other devices (F-06)** need real authentication and TLS. That will get its own design; it is not a setting.
 
 ## Build order
@@ -111,8 +119,8 @@ The desk can spend money and deploy, so:
 1. **Read-only views:** overview, projects, teams, runs and engine, all from the real sources.
 2. **Actions:** the spend switch, pause / resume, run now, add / remove repo and deploy, with confirmation and the
    action log.
-3. **Service:** `factory engine install` / `upgrade` / `start` / `stop` manage the desk's service; `status` prints its
-   URL.
+3. **Service:** `factory engine install` / `upgrade` / `start` / `stop` manage the desk's service; `status` says whether
+   it is up.
 
 ## Tests
 

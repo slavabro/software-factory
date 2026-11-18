@@ -9,7 +9,7 @@ any time without ever running another build's code (Worker Versioning pins each 
     factory engine upgrade                    deploy this checkout's build if it is new; retire drained builds
     factory engine start | stop               the containers and the workers
     factory engine signal | run-now | pause | resume | reconcile | status | spend on|off | repo add|remove PATH
-                   | set-current | drained | build-id
+                   | set-current | drained | build-id | desk [--open]
                                               the engine's own commands (engine/engine/cli.py, on engine/ops.py)
 
 engine.toml has one writer, the functions under "settings" below (install, the engine's CLI and the desk call
@@ -44,7 +44,7 @@ CURRENT = SHARE / "current"
 SOURCE = SHARE / "source"  # the checkout the current build was deployed from (`~/…`), the one the desk deploys
 DEPLOY_LOCK = SHARE / "deploy.lock"  # held by whoever deploys, starts or stops: the desk runs upgrade
 ENV_FILE = CONFIG_DIR / "engine.env"
-DESK_TOKEN = CONFIG_DIR / "desk.token"  # the Factory Desk's access token (0600); `factory engine status` prints its URL
+DESK_TOKEN = CONFIG_DIR / "desk.token"  # the Factory Desk's access token (0600); `factory engine desk` prints the sign-in link
 # engine.toml: the one owner of its path. FACTORY_ENGINE_CONFIG names the file (the worker and the engine's CLI get
 # it from here); without it, the file is in CONFIG_DIR. engine/settings.py reads this name, never its own.
 SETTINGS = Path(os.environ.get("FACTORY_ENGINE_CONFIG") or CONFIG_DIR / "engine.toml").expanduser()
@@ -210,19 +210,32 @@ def ensure_env_file() -> None:
         f.write(f"ENGINE_DB_PASSWORD={secrets.token_urlsafe(24)}\n")
 
 
-def desk_token() -> str:
-    """The Factory Desk's token, made once (random, readable only by the user); every desk request proves it."""
+def read_desk_token() -> str | None:
+    """The Factory Desk's token as it is on disk (None when there is none yet); never makes one, so a desk request
+    can't. A token file anyone but the user can read is made private again, and the repair is said on stderr."""
     try:
+        mode = DESK_TOKEN.stat().st_mode & 0o777
         token = DESK_TOKEN.read_text().strip()
     except FileNotFoundError:
-        token = ""
+        return None
+    if mode != 0o600:
+        os.chmod(DESK_TOKEN, 0o600)
+        print(f"factory engine: {DESK_TOKEN} was mode {mode:o}; made it 0600 (if others could read it, delete it to "
+              "get a new token)", file=sys.stderr)
+    return token or None
+
+
+def desk_token() -> str:
+    """The Factory Desk's token, made once (random, readable only by the user). Only the desk's startup and
+    `factory engine desk` call this; requests only read it (`read_desk_token`)."""
+    token = read_desk_token()
     if token:
         return token
     DESK_TOKEN.parent.mkdir(parents=True, exist_ok=True)
     try:
         fd = os.open(DESK_TOKEN, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     except FileExistsError:  # made meanwhile by another caller (use it), or left empty (fill it)
-        token = DESK_TOKEN.read_text().strip()
+        token = read_desk_token()
         if token:
             return token
         fd = os.open(DESK_TOKEN, os.O_WRONLY | os.O_TRUNC)

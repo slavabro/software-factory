@@ -42,8 +42,11 @@ class Live:
     snap: ops.EngineSnapshot | None
     error: str = ""  # why there is no snapshot
     reachable: bool = True  # False: the server did not answer at all
-    pollers: dict[str, datetime] = field(default_factory=dict)  # build → when its worker last polled
+    # build → when its worker last polled; None when that read failed (pollers_error says why)
+    pollers: dict[str, datetime] | None = field(default_factory=dict)
+    pollers_error: str = ""
     team_runs: dict[str, tuple[ops.RunView, ...]] = field(default_factory=dict)  # team ID → its latest finished runs
+    team_runs_errors: dict[str, str] = field(default_factory=dict)  # team ID → why its runs could not be read
 
 
 def e(value: object) -> str:
@@ -150,6 +153,8 @@ def health(live: Live) -> tuple[str, str, str]:
     view = next((b for b in snap.builds if b.build_id == build), None)
     if view is None or view.server is None or not view.server.current:
         return "degraded", "Engine degraded", f"build {build} is not the server's current build"
+    if live.pollers is None:
+        return "degraded", "Engine degraded", f"whether a worker is polling could not be read ({live.pollers_error})"
     if build not in live.pollers:
         return "degraded", "Engine degraded", f"no worker of build {build} is polling (factory engine start)"
     return "running", "Engine running", ""
@@ -349,11 +354,20 @@ def overview(settings: EngineSettings, live: Live, github: dict[str, RepoGitHub]
     return layout("Overview", "/", settings, live, body)
 
 
+def unread(reason: str) -> str:
+    """A read that failed: unknown, with why."""
+    return f'{mark("unknown")} <span class="note">could not be read: {e(reason)}</span>'
+
+
 def team_row(team: ops.TeamView, live: Live, settings: EngineSettings) -> str:
     runs = live.team_runs.get(team.ref.workflow_id, ())
     running = next((r for r in (live.snap.open_runs if live.snap else ()) if r.workflow_id == team.ref.workflow_id), None)
     last = running or (runs[0] if runs else None)
-    last_html = f"{run_mark(last)} {when(last.started if last is running else last.closed, settings)}" if last else "never"
+    error = live.team_runs_errors.get(team.ref.workflow_id)
+    if last:
+        last_html = f"{run_mark(last)} {when(last.started if last is running else last.closed, settings)}"
+    else:
+        last_html = unread(error) if error else "never"
     nxt = team.scheduled.next_run if team.scheduled and not team.scheduled.paused else None
     return (f'<tr><td data-label="Team"><strong>{link(team_url(team.ref.workflow_id), team.ref.team)}</strong>'
             f'<div class="note">{e(team.prompt)}</div></td>'
@@ -395,6 +409,7 @@ def team_page(settings: EngineSettings, live: Live, team: ops.TeamView | None, t
     ref, s = team.ref, team.scheduled
     running = [r for r in live.snap.open_runs if r.workflow_id == ref.workflow_id]
     runs = live.team_runs.get(ref.workflow_id, ())
+    error = live.team_runs_errors.get(ref.workflow_id)
     cron = cron_words(team.schedule)
     sched = e(cron) + (f' <span class="note">({e(settings.time_zone)}; cron <code>{e(team.schedule)}</code>)</span>'
                        if team.schedule not in ("", "off") else "")
@@ -404,7 +419,8 @@ def team_page(settings: EngineSettings, live: Live, team: ops.TeamView | None, t
         ("Also wakes on", e(", ".join(REASON_WORDS.get(w, w) for w in team.wake_on)) or "nothing else"),
         ("Budget", f"{team.budget_minutes} min of agent time per run"),
         ("Next run", when(s.next_run, settings) if s and not s.paused else ("— (paused)" if s else "—")),
-        ("Last run", (f"{run_mark(runs[0])} {when(runs[0].closed, settings)}" if runs else "never")),
+        ("Last run", (f"{run_mark(runs[0])} {when(runs[0].closed, settings)}" if runs
+                      else unread(error) if error else "never")),
         ("Failures in a row", f"{team.failures} <span class=\"note\">(the engine pauses it at {PAUSE_AFTER_FAILURES})</span>"),
         ("State", schedule_mark(team)),
         ("Links", " ".join([link("/notebook?" + urlencode({"team": ref.workflow_id}), "Notebook"),
@@ -414,8 +430,9 @@ def team_page(settings: EngineSettings, live: Live, team: ops.TeamView | None, t
     body = f'<section class="card">{facts(rows)}</section>'
     if running:
         body += f'<section><h2>Running now</h2>{run_list(running, settings, "", team_link=False)}</section>'
-    body += (f'<section><h2>Recent runs</h2>'
-             f'{run_list(runs, settings, "This team has not run yet.", team_link=False)}</section>')
+    recent = f"<p>{unread(error)}</p>" if error else run_list(runs, settings, "This team has not run yet.",
+                                                                 team_link=False)
+    body += f'<section><h2>Recent runs</h2>{recent}</section>'
     return layout(f"{ref.repo_name} · {ref.team}", "", settings, live, body)
 
 
@@ -445,10 +462,13 @@ def build_rows(live: Live) -> str:
             state = mark("drained") + ' <span class="note">nothing open on it; retired at the next upgrade</span>'
         else:
             state = mark("draining") + ' <span class="note">its open runs finish on it, then it is retired</span>'
-        polled = live.pollers.get(b.build_id)
-        worker = f"worker polling (last {ago(time.time() - polled.timestamp())})" if polled else "no worker polling"
+        if live.pollers is None:
+            worker = f"worker: {unread(live.pollers_error)}"
+        else:
+            polled = live.pollers.get(b.build_id)
+            worker = e(f"worker polling (last {ago(time.time() - polled.timestamp())})" if polled else "no worker polling")
         items.append(f"<li><code>{e(b.build_id)}</code> {state}<div class=\"note\">from commit "
-                     f"<code>{e(short(b.commit))}</code> · {e(worker)}</div></li>")
+                     f"<code>{e(short(b.commit))}</code> · {worker}</div></li>")
     return f'<ul class="plain">{"".join(items)}</ul>'
 
 

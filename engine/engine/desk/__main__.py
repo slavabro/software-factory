@@ -19,7 +19,7 @@ def main() -> int:
         desk.close()
         print(f"factory desk: can't listen on 127.0.0.1:{port}: {e.strerror} (desk_port in engine.toml)", file=sys.stderr)
         return 1
-    print(f"factory desk: serving on 127.0.0.1:{port}; open the URL `factory engine status` prints", file=sys.stderr)
+    print(f"factory desk: serving on 127.0.0.1:{port}; open the link `factory engine desk` prints", file=sys.stderr)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

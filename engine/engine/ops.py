@@ -9,6 +9,7 @@ Every change is appended to `<state>/actions.jsonl`: time, who (`cli` or `desk`)
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import uuid
@@ -359,30 +360,38 @@ async def build_status(client: Client, build: str) -> BuildStatus:
     )
 
 
+def _installed() -> tuple[str | None, list[tuple[str, str | None]]]:
+    """(the current build, each installed build with its commit), from disk."""
+    return install.current_build(), [(b, install.build_commit(b)) for b in install.installed_builds()]
+
+
 async def builds(client: Client) -> list[BuildView]:
-    current = install.current_build()
+    current, installed = await asyncio.to_thread(_installed)  # file reads: off the event loop
     out = []
-    for build in install.installed_builds():
+    for build, commit in installed:
         try:
             server: BuildStatus | None = await build_status(client, build)
         except RPCError:
             server = None
-        out.append(BuildView(build, install.build_commit(build), build == current, server))
+        out.append(BuildView(build, commit, build == current, server))
     return out
 
 
 async def snapshot(client: Client, settings: EngineSettings, recent: int = 10) -> EngineSnapshot:
-    """Everything the engine is and does now: schedules, teams per repo, open and recent runs, builds, settings."""
+    """Everything the engine is and does now: schedules, teams per repo, open and recent runs, builds, settings.
+    Only Temporal calls run on the event loop; git and file reads run in a thread."""
     scheduled = await schedule_views(client)
     by_id = {s.schedule_id: s for s in scheduled}
+    repos = await asyncio.to_thread(lambda: tuple(_repo_view(settings, entry, by_id) for entry in settings.repos))
+    built = await builds(client)
     return EngineSnapshot(
         settings=settings,
-        repos=tuple(_repo_view(settings, entry, by_id) for entry in settings.repos),
+        repos=repos,
         schedules=tuple(scheduled),
         open_runs=tuple(await open_runs(client)),
         recent_runs=tuple(await recent_runs(client, recent)),
-        builds=tuple(await builds(client)),
-        current_build=install.current_build(),
+        builds=tuple(built),
+        current_build=next((b.build_id for b in built if b.current), None) or await asyncio.to_thread(install.current_build),
     )
 
 

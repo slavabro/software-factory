@@ -155,27 +155,31 @@ class GitHub:
 
     def __init__(self, fresh: float = FRESH, retry: float = RETRY) -> None:
         self.fresh, self.retry = fresh, retry
-        self._lock = threading.Lock()
+        self._lock = threading.Lock()  # guards the two dicts
         self._reads: dict[tuple[str, str], Read[Any]] = {}
+        self._key_locks: dict[tuple[str, str], threading.Lock] = {}
 
     def _get(self, root: Path, kind: str, fetch: Callable[[Path], T]) -> Read[T]:
         key = (str(root), kind)
-        now = time.time()
         with self._lock:
-            have: Read[T] = self._reads.get(key, Read())
-        if have.read_at is not None and not have.error and now - have.read_at < self.fresh:
-            return have
-        if have.error and now - have.tried_at < self.retry:
-            return have
-        try:
-            got: Read[T] = Read(fetch(root), time.time(), "", now)
-        except GhError as e:
-            got = Read(have.value, have.read_at, str(e), now)
-        except Exception as e:  # noqa: BLE001 — never fail the page over one repo's read
-            got = Read(have.value, have.read_at, f"could not read: {e}"[:200], now)
-        with self._lock:
-            self._reads[key] = got
-        return got
+            key_lock = self._key_locks.setdefault(key, threading.Lock())
+        with key_lock:  # pages loading at once run `gh` once per key; the others wait for its answer
+            now = time.time()
+            with self._lock:
+                have: Read[T] = self._reads.get(key, Read())
+            if have.read_at is not None and not have.error and now - have.read_at < self.fresh:
+                return have
+            if have.error and now - have.tried_at < self.retry:
+                return have
+            try:
+                got: Read[T] = Read(fetch(root), time.time(), "", now)
+            except GhError as e:
+                got = Read(have.value, have.read_at, str(e), now)
+            except Exception as e:  # noqa: BLE001 — never fail the page over one repo's read
+                got = Read(have.value, have.read_at, f"could not read: {e}"[:200], now)
+            with self._lock:
+                self._reads[key] = got
+            return got
 
     def repo(self, root: Path) -> RepoGitHub:
         return RepoGitHub(self._get(root, "ci", read_ci), self._get(root, "prs", read_prs))

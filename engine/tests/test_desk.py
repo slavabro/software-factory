@@ -5,16 +5,22 @@ Temporal server."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import http.client
+import http.server
+import io
 import os
+import socket
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
+from urllib.parse import urlencode
 
 from temporalio.client import Client
 from temporalio.service import RPCError
@@ -24,13 +30,15 @@ from factory_runtime.temporal import data_converter
 from engine import ops, schedules, settings as settings_mod
 from engine.activities.teams import REPO_KEY, TEAM_KEY
 from engine.desk import pages, repos
+from engine import cli
+from engine.desk import server as desk_server
 from engine.desk.server import Desk, make_server
 from engine.factory import install
 from engine.models import TeamRef
 from engine.settings import NAMESPACE, EngineSettings
 from engine.worker import make_worker
 from tests.fakes import Fakes
-from tests.repo_fixture import make_repo
+from tests.repo_fixture import git, make_repo
 
 SCRIPT = "<script>alert(1)</script>"
 REF = TeamRef(repo="/r/demo", repo_name="demo", team="qa")
@@ -131,7 +139,6 @@ class RenderTest(unittest.TestCase):
         never = pages.ci_mark(repos.Read(error="gh failed: no network"))
         self.assertIn('data-state="unknown"', never)
         self.assertIn("gh failed: no network", never)
-        import time
         stale = pages.ci_mark(repos.Read(repos.CI("passing"), time.time() - 1500, "gh took longer than 15 s"))
         self.assertIn('data-state="unknown"', stale)
         self.assertIn("last: passing, 25 min ago", stale)
@@ -182,6 +189,21 @@ class GitHubReadTest(unittest.TestCase):
             with self.assertRaisesRegex(repos.GhError, "not installed"):
                 repos.run_gh(self.root, "pr", "list")
         self.assertEqual(call.call_args.kwargs["timeout"], repos.GH_TIMEOUT)
+
+    def test_pages_loading_at_once_run_gh_once(self):
+        gh, calls = repos.GitHub(), []
+
+        def slow(root: Path) -> repos.CI:
+            calls.append(root)
+            time.sleep(0.2)
+            return repos.CI("passing")
+
+        threads = [threading.Thread(target=gh._get, args=(self.root, "ci", slow)) for _ in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(len(calls), 1)
 
     def test_only_factory_branches_are_factory_prs(self):
         rows = [{"number": 1, "title": "t", "url": "u", "headRefName": "factory/upgrade-1", "isDraft": False},
@@ -250,6 +272,58 @@ class SafetyTest(unittest.TestCase, Isolated, Served):
         self.settings = EngineSettings(repos=(str(self.repo),), time_zone="UTC", server_port=1)  # nothing listens
         self.serve(self, self.settings)
 
+    def test_a_request_never_makes_the_token(self):
+        status, _, body = self.get("/?token=anything")
+        self.assertEqual(status, 403)
+        self.assertIn("factory engine desk", body)
+        self.assertFalse(install.DESK_TOKEN.exists())
+
+    def test_other_apps_malformed_cookies_dont_hide_the_desks(self):
+        self.sign_in()
+        mine = self.cookie
+        for others in ('x={"a":1, "b":2}', 'sess=a b', 'a="x', 'broken', '"=;;'):
+            status, _, _ = self.get("/desk.css", cookie=f"{others}; {mine}; later=1")
+            self.assertEqual(status, 200, others)
+        self.assertEqual(self.get("/desk.css", cookie='x={"a":1}; other=2')[0], 403)
+
+    def test_the_cookie_is_derived_from_the_token_not_the_token(self):
+        token = install.desk_token()
+        self.sign_in()
+        self.assertNotIn(token, self.cookie)
+        self.assertEqual(self.cookie, f"factory_desk_{self.port}={desk_server.cookie_value(token)}")
+        self.assertEqual(self.get("/desk.css", cookie=f"factory_desk_{self.port}={token}")[0], 403)
+
+    def test_status_tells_the_desk_from_another_program_on_its_port(self):
+        self.assertEqual(desk_server.probe(self.port), "up")
+        quiet = type("Quiet", (http.server.BaseHTTPRequestHandler,), {"log_message": lambda *a: None})
+        other = http.server.HTTPServer(("127.0.0.1", 0), quiet)  # answers 501, without the desk's header
+        threading.Thread(target=other.serve_forever, daemon=True).start()
+        self.addCleanup(other.server_close)
+        self.addCleanup(other.shutdown)
+        self.assertEqual(desk_server.probe(other.server_port), "port held by something else")
+        free = other.server_port + 1 if other.server_port + 1 != self.port else other.server_port + 2
+        self.assertIn(desk_server.probe(free), ("not running", "port held by something else"))
+
+    def test_the_desk_command_prints_the_sign_in_link_and_makes_the_token(self):
+        out = io.StringIO()
+        settings = replace(self.settings, desk_port=self.port)
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(cli.cmd_desk(settings, cli.parser().parse_args(["desk"])), 0)
+        token = install.read_desk_token()
+        self.assertEqual(out.getvalue().strip(), f"http://localhost:{self.port}/?token={token}")
+        self.assertIn(f"— up;", cli.desk_line(settings))
+        self.assertNotIn(token or "?", cli.desk_line(settings))
+
+    def test_the_request_log_never_holds_the_token(self):
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            with socket.create_connection(("127.0.0.1", self.port), timeout=10) as sock:
+                sock.sendall(b"GET /?token=s3cret extra words HTTP/1.1\r\n\r\n")  # a bad request line is logged
+                answer = sock.recv(4096)
+        self.assertIn(b" 400 ", answer)
+        self.assertIn("token=", err.getvalue())
+        self.assertNotIn("s3cret", err.getvalue())
+
     def test_a_wrong_host_is_refused_before_anything_else(self):
         token = install.desk_token()
         for host in ("evil.example:%d" % self.port, f"localhost:{self.port + 1}", "localhost", "127.0.0.1"):
@@ -262,7 +336,7 @@ class SafetyTest(unittest.TestCase, Isolated, Served):
         for path in ("/", "/projects", "/runs", "/engine", "/desk.css", "/notebook?team=team/demo/qa", "/nope"):
             status, headers, body = self.get(path)
             self.assertEqual(status, 403, path)
-            self.assertIn("factory engine status", body)
+            self.assertIn("factory engine desk", body)
             self.assertTrue(headers["content-type"].startswith("text/plain"))
         self.assertEqual(self.get("/", cookie=f"factory_desk_{self.port}=wrong")[0], 403)
 
@@ -273,7 +347,7 @@ class SafetyTest(unittest.TestCase, Isolated, Served):
         self.assertEqual(status, 303)
         self.assertEqual(headers["location"], "/team?id=team%2Fdemo%2Fqa")
         cookie = headers["set-cookie"]
-        for part in ("HttpOnly", "SameSite=Strict", "Path=/", f"factory_desk_{self.port}={token}"):
+        for part in ("HttpOnly", "SameSite=Strict", "Path=/", f"factory_desk_{self.port}={desk_server.cookie_value(token)}"):
             self.assertIn(part, cookie)
         self.assertEqual(self.get("/?token=not-it")[0], 403)
         self.cookie = cookie.split(";")[0]
@@ -390,6 +464,44 @@ class DeskServerTest(unittest.IsolatedAsyncioTestCase, Isolated, Served):
 
         status, _, _ = await asyncio.to_thread(self.get, "/team?id=team%2Fdemo%2Fnobody")
         self.assertEqual(status, 404)
+
+    async def test_a_failed_secondary_read_shows_unknown_and_keeps_the_rest(self):
+        await ops.reconcile(self.client, self.settings)
+        real = ops.recent_runs
+
+        async def team_runs_fail(client: Client, limit: int, workflow_id: str | None = None) -> list[ops.RunView]:
+            if workflow_id is not None:  # one team's runs; the snapshot's own read still works
+                raise RuntimeError("runs unreadable")
+            return await real(client, limit)
+
+        (install.BUILDS / "b1").mkdir(parents=True)  # a build, so the engine page has a worker line to show
+        with mock.patch.object(repos, "run_gh", side_effect=repos.GhError("offline")), \
+             mock.patch.object(ops, "pollers", side_effect=RuntimeError("pollers unreadable")), \
+             mock.patch.object(ops, "recent_runs", team_runs_fail):
+            projects = await self.page("/projects")
+            team_page = await self.page("/team?id=team%2Fdemo%2Fqa")
+            engine = await self.page("/engine")
+        self.assertIn("runs unreadable", projects)  # the team's last run: unknown, with why
+        self.assertIn('data-state="unknown"', projects)
+        self.assertIn(schedules.NEW_NOTE, projects)  # the snapshot is still there
+        self.assertIn("runs unreadable", team_page)
+        self.assertIn('data-state="paused"', team_page)
+        self.assertIn("pollers unreadable", engine)
+        self.assertIn("<span>Reachable</span>", engine)
+
+    async def test_a_repo_name_any_config_allows_is_found_by_lookup(self):
+        (self.repo / ".factory.toml").write_text((self.repo / ".factory.toml").read_text()
+                                                 .replace('name = "demo"', 'name = "odd name+1 & co"'))
+        for args in (("commit", "-qam", "rename"), ("push", "-q", "origin", "main")):
+            git(*args, cwd=self.repo)
+        state = self.state / "teams" / "odd name+1 & co" / "qa"
+        state.mkdir(parents=True)
+        (state / "notebook.md").write_text("an odd repo's notes\n")
+        team_id = "team/odd name+1 & co/qa"
+        notebook = await self.page("/notebook?" + urlencode({"team": team_id}))
+        self.assertIn("an odd repo&#x27;s notes", notebook)
+        team_page = await self.page(pages.team_url(team_id))
+        self.assertIn("odd name+1 &amp; co · qa", team_page)
 
 
 if __name__ == "__main__":
