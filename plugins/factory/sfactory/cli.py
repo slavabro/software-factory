@@ -3,6 +3,10 @@
     factory config                         the repo's resolved .factory.toml
     factory upgrade scan [--json|--md]     what can be upgraded, how far, with release-notes links
     factory upgrade deprecations [FILE]    deprecation warnings from our own code in test/build output (stdin if no FILE)
+    factory efficiency scan [--since 7d] [--all] [--json] [--top N]
+                                           wasted tokens and repeated work in agent sessions, factory runs and the
+                                           app's own model calls ([efficiency] in .factory.toml)
+    factory efficiency show SESSION [--json]  one session's tool calls: names, paths, sizes, costs (no content)
     factory task ...                       the task system (`factory task --help`); with [tasks] system = "commands"
                                            only `new --title T --body-file F [--priority P]` and `exists QUERY`,
                                            which run the repo's [tasks] new / exists with every value quoted
@@ -24,7 +28,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import config as config_mod
-from . import deprecations, engine, runner, tasks, upgrade
+from . import deprecations, efficiency, engine, runner, tasks, upgrade
 
 
 def _root(path: Path | None) -> Path:
@@ -79,12 +83,21 @@ def main(argv: list[str] | None = None) -> int:
     dp.add_argument("file", nargs="?", type=Path)
     dp.add_argument("--json", action="store_true")
     dp.add_argument("--base", type=Path, help="directory the tool ran in (default: repo root)")
+    ef = sub.add_parser("efficiency").add_subparsers(dest="action", required=True)
+    es = ef.add_parser("scan")
+    es.add_argument("--since", help="window: 7d, 24h, 2w or a date (default: [efficiency] since)")
+    es.add_argument("--all", action="store_true", help="every project, not only this repo and its worktrees")
+    es.add_argument("--json", action="store_true")
+    es.add_argument("--top", type=int, default=20, help="rows in the top findings table")
+    eh = ef.add_parser("show")
+    eh.add_argument("session", help="a session id or its first characters")
+    eh.add_argument("--json", action="store_true")
     sub.add_parser("task", help="the task system: factory task --help")  # parsed by task() above
     rn = sub.add_parser("run")
     rn.add_argument("capability")
     rn.add_argument("--dry-run", action="store_true")
     rn.add_argument("--keep", action="store_true", help="keep the worktree even if nothing was pushed")
-    for p in (sc, dp, rn):
+    for p in (sc, dp, rn, es, eh):
         p.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -110,6 +123,23 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{d.kind:<10} {where}{d.category}: {d.message}")
             print(f"{sum(d.kind == 'ours' for d in found)} in our code · {len(found)} total", file=sys.stderr)
         return 1 if any(d.kind == "ours" for d in found) else 0
+    if args.cmd == "efficiency" and args.action == "scan":
+        try:
+            report = efficiency.scan(cfg, since=args.since, all_repos=True if args.all else None)
+        except ValueError as exc:
+            print(f"factory: {exc}", file=sys.stderr)
+            return 2
+        print(json.dumps(report.as_dict(), indent=2) if args.json else efficiency.markdown(report, args.top))
+        return 0
+    if args.cmd == "efficiency" and args.action == "show":
+        found = efficiency.find_transcript(Path(cfg.efficiency.projects_dir).expanduser(), args.session)
+        s = efficiency.read_session(str(found)) if found else None
+        if s is None:
+            print(f"factory: no session {args.session!r} with model requests", file=sys.stderr)
+            return 1
+        efficiency.place(s)
+        print(json.dumps(efficiency.timeline(s), indent=2) if args.json else efficiency.show_text(s))
+        return 0
     if args.cmd == "run":
         return runner.run(cfg, args.capability, dry_run=args.dry_run, keep=args.keep)
     return 2

@@ -26,6 +26,7 @@ SCRUB = ("PYTHONPATH", "VIRTUAL_ENV", "PYTHONHOME", "CLAUDECODE")  # the caller'
 
 PROMPTS = {
     "upgrade": "/factory:upgrade",
+    "efficiency": "/factory:efficiency",
 }
 
 # The agent writes its digest inside its own worktree (a path outside it is not writable in an unattended run);
