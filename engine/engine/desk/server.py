@@ -2,8 +2,10 @@
 
 A standard-library `ThreadingHTTPServer` on 127.0.0.1 that renders each page on the server from fresh reads. The
 Temporal client lives on one asyncio loop in a background thread, and only Temporal calls run there; request threads
-hand it coroutines with `run_coroutine_threadsafe`. Only GET, and only these pages; the actions come with build
-order step 2.
+hand it coroutines with `run_coroutine_threadsafe`. Pages are GETs; a change is a form POSTed to `/act/<action>` and
+made through `engine.ops` (as the CLI makes it, logged with who = desk), then redirected to a page that reads the
+result back from the engine (post-redirect-get). Changes that spend money or deploy (and removing a repo) open a
+server-rendered confirm page first (`/confirm`), so no script is needed.
 
 Every request, reads included, passes these checks before anything is read:
 
@@ -11,6 +13,9 @@ Every request, reads included, passes these checks before anything is read:
 - **Token**: the first visit carries `?token=` (the link `factory engine desk` prints); it is traded for an
   HttpOnly, SameSite=Strict cookie and a redirect to the URL without it. The cookie holds a value derived from the
   token, never the token: cookies are not scoped by port, so every other app on localhost receives it.
+- **A POST** also needs an `Origin` equal to `http://<its Host>` (a missing one is refused: SameSite treats every
+  localhost port as the same site) and the form token (`form_token`, derived from the token, compared in constant
+  time).
 - Responses carry CSP `default-src 'self'` and no CORS headers; logs and notebooks are found from team and run IDs
   looked up among the configured teams, never from a path the client gives.
 
@@ -52,6 +57,9 @@ T = TypeVar("T")
 
 CONNECT_TIMEOUT = 5.0  # seconds to reach the engine's Temporal server
 READ_TIMEOUT = 60.0  # seconds a page's reads may take
+ACTION_TIMEOUT = 300.0  # seconds a change may take (adding a repo fetches it and every other repo)
+BODY_LIMIT = 16 * 1024  # bytes a form may have
+NOTE_CHARS = 300  # a pause or resume note
 REQUEST_TIMEOUT = 30  # seconds a client may take to send its request
 TEXT_LIMIT = 512 * 1024  # a log or notebook shows its last this many bytes
 COOKIE_MAX_AGE = 30 * 24 * 3600
@@ -84,6 +92,12 @@ def cookie_value(token: str) -> str:
     return hmac.new(token.encode(), b"desk-cookie", hashlib.sha256).hexdigest()
 
 
+def form_token(token: str) -> str:
+    """What every form carries: derived from the token and the cookie's value, so only a page the desk served (to a
+    browser holding the cookie) has it, and a new token voids old pages' forms."""
+    return hmac.new(token.encode(), b"desk-form|" + cookie_value(token).encode(), hashlib.sha256).hexdigest()
+
+
 def cookie_named(header: str | None, name: str) -> str | None:
     """The cookie `name` from a Cookie header, parsed by hand: other localhost apps' cookies (JSON values, spaces,
     stray quotes) must not hide the desk's, as they would from http.cookies."""
@@ -111,6 +125,21 @@ def probe(port: int, timeout: float = 2.0) -> DeskState:
         return "port held by something else"
     finally:
         conn.close()
+
+
+@dataclass(frozen=True)
+class Request:
+    method: str
+    target: str  # path and query, as sent
+    host: str | None
+    cookie: str | None
+    port: int  # the port the desk listens on
+    origin: str | None = None
+    body: bytes = b""  # a POST's form
+
+
+class EngineDown(Exception):
+    """The engine's Temporal server can't be reached, so a change could not be made."""
 
 
 @dataclass
@@ -154,13 +183,23 @@ class Desk:
 
     # ---- reads on the Temporal loop -----------------------------------------------------------------------------
 
-    def _on_loop(self, coro: Coroutine[Any, Any, T]) -> T:
+    def _on_loop(self, coro: Coroutine[Any, Any, T], timeout: float = READ_TIMEOUT, what: str = "reads") -> T:
         future: Future[T] = asyncio.run_coroutine_threadsafe(coro, self.loop)
         try:
-            return future.result(READ_TIMEOUT)
+            return future.result(timeout)
         except FutureTimeout:
             future.cancel()
-            raise TimeoutError(f"the engine's reads took longer than {READ_TIMEOUT:.0f} s") from None
+            raise TimeoutError(f"the engine's {what} took longer than {timeout:.0f} s") from None
+
+    def on_engine(self, settings: EngineSettings, op: Callable[[Client], Coroutine[Any, Any, T]]) -> T:
+        """An action on the Temporal loop; EngineDown when the server can't be reached."""
+        async def run() -> T:
+            try:
+                client = await self._client(settings)
+            except Exception as e:  # noqa: BLE001 — down or refusing: the error page says so
+                raise EngineDown(f"the engine's Temporal server is not answering ({_short(e)})") from None
+            return await op(client)
+        return self._on_loop(run(), ACTION_TIMEOUT, "change")
 
     async def _client(self, settings: EngineSettings) -> Client:
         client = await asyncio.wait_for(get_client(settings.temporal), CONNECT_TIMEOUT)
@@ -204,7 +243,8 @@ class Desk:
 
     # ---- the request path ---------------------------------------------------------------------------------------
 
-    def handle(self, method: str, target: str, host: str | None, cookie: str | None, port: int) -> Response:
+    def handle(self, req: Request) -> Response:
+        method, target, host, cookie, port = req.method, req.target, req.host, req.cookie, req.port
         if host not in (f"localhost:{port}", f"127.0.0.1:{port}"):
             return refused(403, "Factory Desk: this host name is not served here; use the link `factory engine "
                                 "desk` prints.\n")
@@ -228,42 +268,149 @@ class Desk:
         sent = cookie_named(cookie, name)
         if sent is None or not hmac.compare_digest(sent.encode(), cookie_value(token).encode()):
             return refused(403, REFUSED)
-        if method != "GET":
-            return Response(405, "", "text/plain; charset=utf-8", {"Allow": "GET"})
+        if method not in ("GET", "POST"):
+            return Response(405, "", "text/plain; charset=utf-8", {"Allow": "GET, POST"})
+        form: dict[str, str] = {}
+        if method == "POST":
+            # SameSite treats every localhost port as one site, so a change must also show it comes from the desk's
+            # own page: its exact origin (scheme, host and port) and the form token only the desk's pages carry.
+            if req.origin is None or req.origin != f"http://{host}":
+                return refused(403, f"Factory Desk: a change is taken only from the desk's own pages (Origin "
+                                    f"http://{host}); this request's Origin is {req.origin or 'missing'}.\n")
+            form = {k: v[-1] for k, v in parse_qs(req.body.decode("utf-8", "replace"), keep_blank_values=True).items()}
+            if not hmac.compare_digest(form.get("form", "").encode(), form_token(token).encode()):
+                return refused(403, "Factory Desk: this form's token is missing or out of date; reload the page and "
+                                    "try again.\n")
         try:
             settings = self.load_settings()
         except Exception as e:  # noqa: BLE001 — a broken engine.toml: say so, don't crash
             return refused(500, f"Factory Desk: engine.toml could not be read: {_short(e)}\n")
+        if method == "POST":
+            return self.post(parts.path, form, settings)
         args = {k: v[-1] for k, v in query.items()}
-        return self.page(parts.path, args, settings)
+        return self.page(parts.path, args, settings, form_token(token))
 
     def find_team(self, settings: EngineSettings, team_id: str) -> ops.TeamView | None:
         return ops.find_team(settings, team_id) if plausible_team_id(team_id) else None
 
-    def page(self, path: str, args: dict[str, str], settings: EngineSettings) -> Response:
+    def page(self, path: str, args: dict[str, str], settings: EngineSettings, form: str) -> Response:
+        done = args.get("done", "")
         if path == "/desk.css":
             return Response(200, pages.STYLE, "text/css; charset=utf-8")
         if path == "/":
             live = self.live(settings, pages.RECENT)
-            return Response(200, pages.overview(settings, live, *self.repo_reads(live)))
+            notice = pages.spend_notice(settings) if done == "spend" else ""
+            return Response(200, pages.overview(settings, live, *self.repo_reads(live), form, notice))
         if path == "/projects":
             live = self.live(settings, team_runs=lambda snap: {t.ref.workflow_id: 1 for r in snap.repos for t in r.teams})
-            return Response(200, pages.projects(settings, live, *self.repo_reads(live)))
+            notice = pages.repo_notice(done, args, settings, live) if done in ("add-repo", "remove-repo") else ""
+            return Response(200, pages.projects(settings, live, *self.repo_reads(live), form, notice))
         if path == "/runs":
             return Response(200, pages.runs_page(settings, self.live(settings, pages.RECENT_RUNS)))
         if path == "/engine":
             live = self.live(settings)
-            return Response(200, pages.engine_page(settings, live, install.source_head(), install.deploy_running()))
+            return Response(200, pages.engine_page(settings, live, ops.deploy_plan(settings),
+                                                   ops.recent_deploys(settings), form))
+        if path == "/deploy":
+            run = ops.read_deploy(settings, args.get("id", ""))
+            if run is None:
+                return Response(404, pages.message_page(settings, "Not found", "No such deploy."))
+            return Response(200, pages.deploy_page(settings, run))
         if path == "/team":
             team_id = args.get("id", "")
             team = self.find_team(settings, team_id)
             live = self.live(settings, team_runs=lambda _: {team_id: pages.TEAM_RUNS} if team else {})
             if team is not None and live.snap is not None:  # the snapshot's view carries its schedule's state
                 team = next((t for r in live.snap.repos for t in r.teams if t.ref.workflow_id == team_id), team)
-            return Response(200 if team else 404, pages.team_page(settings, live, team, team_id))
+            notice = ""
+            if team is not None and live.snap is not None and done in ("pause", "resume", "run-now"):
+                notice = pages.team_notice(done, team, live, settings)
+            return Response(200 if team else 404, pages.team_page(settings, live, team, team_id, form, notice))
+        if path == "/confirm":
+            return self.confirm(args, settings, form)
         if path in ("/log", "/notebook"):
             return self.text(path, args, settings)
         return Response(404, pages.message_page(settings, "Not found", "The desk has no such page."))
+
+    # ---- changes ------------------------------------------------------------------------------------------------
+
+    def confirm(self, args: dict[str, str], settings: EngineSettings, form: str) -> Response:
+        """The confirm page of a change that spends money, deploys or deletes schedules (nothing changes yet)."""
+        action = args.get("action", "")
+        if action == "spend-on":
+            return Response(200, pages.confirm_spend_on(settings, form))
+        if action == "run-now":
+            team = self.find_team(settings, args.get("team", ""))
+            if team is None:
+                return Response(404, pages.message_page(settings, "Not found", "No such team in the engine's repos."))
+            return Response(200, pages.confirm_run_now(settings, team, form))
+        if action == "remove-repo":
+            entry = args.get("entry", "")
+            if entry not in settings.repos:
+                return Response(404, pages.message_page(settings, "Not found", "That is not one of the engine's repos."))
+            return Response(200, pages.confirm_remove_repo(settings, self.live(settings), entry, form))
+        if action == "deploy":
+            plan = ops.deploy_plan(settings)
+            reason = ("no deploy has recorded the source checkout yet" if plan is None else plan.refusal)
+            if plan is None or reason:
+                return Response(409, pages.error_page(settings, "Deploy", reason, "/engine"))
+            return Response(200, pages.confirm_deploy(settings, plan, form))
+        return Response(404, pages.message_page(settings, "Not found", "The desk has no such change."))
+
+    def post(self, path: str, form: dict[str, str], settings: EngineSettings) -> Response:
+        """A change, then a redirect to the page that reads it back (post-redirect-get). A refusal or an engine that
+        can't be reached is a page with the reason, never a traceback."""
+        action = path.removeprefix("/act/") if path.startswith("/act/") else ""
+        if action not in pages.ACTIONS:
+            return Response(404, pages.message_page(settings, "Not found", "The desk has no such change."))
+        fields = {k: v for k, v in form.items() if k not in ("form", "confirmed")}
+        if action in pages.CONFIRM and form.get("confirmed") != "yes":
+            return Response(303, "", headers={"Location": pages.confirm_url(action, fields)})
+        try:
+            location = self.act(action, fields, settings)
+        except ops.OpError as e:
+            return Response(409, pages.error_page(settings, "Not done", str(e)))
+        except EngineDown as e:
+            return Response(503, pages.error_page(settings, "Not done", str(e)))
+        except TimeoutError as e:
+            return Response(504, pages.error_page(settings, "Not done", f"{_short(e)}; it may still finish — reload "
+                                                                        "the page to see"))
+        except Exception as e:  # noqa: BLE001 — a bug or a broken file: the reason, never a traceback
+            return Response(500, pages.error_page(settings, "Not done", _short(e)))
+        return Response(303, "", headers={"Location": location})
+
+    def act(self, action: str, fields: dict[str, str], settings: EngineSettings) -> str:
+        """Make the change through engine.ops (the CLI's own operations, logged as the desk's); where to go next."""
+        if action in ("spend-on", "spend-off"):
+            ops.set_unattended(settings, action == "spend-on", who="desk")
+            return "/?done=spend"
+        if action in ("pause", "resume", "run-now"):
+            team = self.find_team(settings, fields.get("team", ""))
+            if team is None:
+                raise ops.OpError("no such team in the engine's repos")
+            ref, note = team.ref, fields.get("note", "").strip()[:NOTE_CHARS] or None
+            if action == "pause":
+                self.on_engine(settings, lambda c: ops.pause(c, settings, ref, note, who="desk"))
+            elif action == "resume":
+                self.on_engine(settings, lambda c: ops.resume(c, settings, ref, note, who="desk"))
+            else:
+                self.on_engine(settings, lambda c: ops.run_now(c, settings, ref, who="desk"))
+            return pages.team_url(ref.workflow_id) + "&" + urlencode({"done": action})
+        if action == "add-repo":
+            path = fields.get("path", "").strip()
+            if not path:
+                raise ops.OpError("give the path of the repo's checkout")
+            added = self.on_engine(settings, lambda c: ops.add_repo(c, settings, path, who="desk"))
+            return "/projects?" + urlencode({"done": "add-repo", "repo": added.name}) + "#" + pages.anchor(added.name)
+        if action == "remove-repo":
+            entry = fields.get("entry", "")
+            if entry not in settings.repos:
+                raise ops.OpError(f"{entry} is not one of the engine's repos")
+            removed = self.on_engine(settings, lambda c: ops.remove_repo(c, settings, entry, who="desk"))
+            return "/projects?" + urlencode({"done": "remove-repo", "entry": removed.entry, "repo": removed.name})
+        if action == "deploy":
+            return pages.deploy_url(ops.start_deploy(settings, who="desk").deploy_id)
+        raise ops.OpError(f"no such change: {action}")
 
     def text(self, path: str, args: dict[str, str], settings: EngineSettings) -> Response:
         """A run's log or a team's notebook, found from the team's ID (and the run's), never from a client path."""
@@ -303,9 +450,20 @@ class Handler(BaseHTTPRequestHandler):
     def _serve(self) -> None:
         port = cast(ThreadingHTTPServer, self.server).server_port
         try:
-            resp = self.desk.handle(self.command, self.path, self.headers.get("Host"), self.headers.get("Cookie"), port)
-        except Exception as e:  # noqa: BLE001 — a bug in a page: a short error, never a dead server
-            resp = refused(500, f"Factory Desk: this page failed: {_short(e)}\n")
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = -1
+        if not 0 <= length <= BODY_LIMIT:
+            resp = refused(413, "Factory Desk: that request's body is not a form the desk takes.\n")
+            self.close_connection = True
+        else:
+            body = self.rfile.read(length) if length else b""
+            req = Request(self.command, self.path, self.headers.get("Host"), self.headers.get("Cookie"), port,
+                          self.headers.get("Origin"), body)
+            try:
+                resp = self.desk.handle(req)
+            except Exception as e:  # noqa: BLE001 — a bug in a page: a short error, never a dead server
+                resp = refused(500, f"Factory Desk: this page failed: {_short(e)}\n")
         body = resp.body.encode()
         self.send_response(resp.status)
         for key, value in {**HEADERS, **resp.headers, "Content-Type": resp.content_type,

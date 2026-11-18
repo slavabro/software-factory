@@ -54,6 +54,24 @@ class ServerTest(unittest.IsolatedAsyncioTestCase):
         report = await schedules.reconcile(self.client, self.settings)
         self.assertIn("deleted schedule/demo/qa (no longer in config)", report)
 
+    async def test_an_unchanged_schedule_is_left_alone_and_a_changed_one_updated(self):
+        await schedules.reconcile(self.client, self.settings)
+        handle = self.client.get_schedule_handle(self.ref.schedule_id)
+        before = (await handle.describe()).info.last_updated_at
+        self.assertEqual(await schedules.reconcile(self.client, self.settings), [])  # nothing changed, nothing said
+        self.assertEqual((await handle.describe()).info.last_updated_at, before)  # and the server was not written to
+        self.settings = EngineSettings(repos=(str(self.repo),), time_zone="Asia/Jerusalem")
+        report = await schedules.reconcile(self.client, self.settings)
+        self.assertIn("updated schedule/demo/qa (0 2 * * *)", report)
+        from tests.repo_fixture import git
+
+        (self.repo / ".factory.toml").write_text((self.repo / ".factory.toml").read_text()
+                                                 .replace('schedule = "0 2 * * *"', 'schedule = "0 3 * * *"'))
+        git("commit", "-qam", "later", cwd=self.repo)
+        git("push", "-q", "origin", "main", cwd=self.repo)
+        self.assertEqual(await schedules.reconcile(self.client, self.settings), ["updated schedule/demo/qa (0 3 * * *)"])
+        self.assertEqual(await schedules.reconcile(self.client, self.settings), [])
+
     async def test_schedules_follow_the_engine_time_zone(self):
         self.settings = EngineSettings(repos=(str(self.repo),), time_zone="Asia/Jerusalem")
         await schedules.reconcile(self.client, self.settings)

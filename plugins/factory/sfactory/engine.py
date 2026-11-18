@@ -514,7 +514,9 @@ def deploy() -> list[str]:
     out.append(f"current build: {build}" + (f" (was {previous})" if previous and previous != build else ""))
     out += retire(python, keep=build)
     reconcile = engine_cli(python, "reconcile", capture=True)
-    out.append(reconcile.stdout.strip() or reconcile.stderr.strip())
+    said = reconcile.stdout.strip() or reconcile.stderr.strip()
+    if said:  # an unchanged schedule says nothing
+        out.append(said)
     return out
 
 

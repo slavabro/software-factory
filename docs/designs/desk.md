@@ -57,8 +57,9 @@ onto them, so the desk and the CLI share one owner per action:
 
 - **`engine/engine/desk/`**: a standard-library `ThreadingHTTPServer` that renders HTML on the server, with one
   asyncio loop in a background thread holding the Temporal client (requests use `run_coroutine_threadsafe`). There is
-  no JSON API and no JS framework. Changes are HTML forms posted and then redirected (post-redirect-get), and the
-  money-spending ones confirm once. No new dependency: the engine's lockfile is part of the Build ID, so a web stack
+  no JSON API and no JS framework. Changes are HTML forms posted to `/act/<action>` and then redirected
+  (post-redirect-get) to a page that reads the result back from the engine. Spend on, run now, deploy and remove a
+  repo confirm once, on a server-rendered page (`/confirm`, a GET that changes nothing), so CSP needs no script. No new dependency: the engine's lockfile is part of the Build ID, so a web stack
   would sit in every worker and redeploy them on each bump.
 - **Its own service**, `com.software-factory.engine.desk` (launchd / systemd user unit), one label that always runs the
   `current` build. `deploy()` restarts it on the new build right after set-current and before `retire()`, so a build
@@ -79,9 +80,11 @@ onto them, so the desk and the CLI share one owner per action:
 - The Engine panel shows "running build X from commit A; source checkout `~/Dev/software-factory` at B (branch b)".
   When they differ, it offers **Deploy**. The desk never pulls or switches branches in the checkout: that checkout
   belongs to the principal, and the desk deploys exactly what the CLI would.
-- Deploy runs `<source>/home/bin/factory engine upgrade` as a detached process (its own session) with its output in
-  `state/deploys/<time>.log`, then redirects to a page that shows that log. Because the upgrade restarts the desk
-  itself, the upgrade must not be the desk's child. A second deploy while one is running is refused, with a lock file
+- Deploy runs `<source>/home/bin/factory engine upgrade` as a detached process (its own session, stdin closed) with
+  its output in `state/deploys/<time>.log`, then redirects to a page that shows that log by its ID (the UTC start
+  time), never a path. Because the upgrade restarts the desk itself, the upgrade must not be the desk's child. It
+  runs under `sh`, which appends the upgrade's exit status to the log, so a desk started after the restart still
+  says whether it worked; `<time>.json` keeps what it was started with and its pid (running while that lives). A second deploy while one is running is refused, with a lock file
   shared with the CLI (`install`, `upgrade`, `start` and `stop` all take it). The desk reads who holds it without
   taking it, so asking never fails a real deploy.
 

@@ -35,9 +35,9 @@ engine/                        its own pyproject + lockfile: factory-runtime (..
 ├── engine/workflows/tick.py   ScheduleTick
 ├── engine/activities/         repo.py (resolve, prepare, deliver, clean), agent.py (the session), teams.py (budget, outcome, wake)
 ├── engine/schedules.py        desired schedules from each repo's .factory.toml → create / update / delete
-├── engine/ops.py              the engine's reads and actions (snapshot, pause, run now, …), shared with the desk
+├── engine/ops.py              the engine's reads and actions (snapshot, pause, run now, deploy, …), shared with the desk
 ├── engine/cli.py              signal, run-now, pause, resume, status (what `factory engine …` calls), on ops.py
-├── engine/desk/               the Factory Desk (docs/designs/desk.md): server.py (safety, reads), pages.py, repos.py (gh)
+├── engine/desk/               the Factory Desk (docs/designs/desk.md): server.py (safety, reads, changes), pages.py, repos.py (gh)
 ├── engine/worker.py           the one worker: task queue `factory`, Worker Versioning
 └── tests/                     time-skipping tests, activity tests, replay tests
 ```
@@ -124,6 +124,8 @@ workflow ID (unique per scheduled time, so a retried tick is deduped).
   schedule is `[upgrade] schedule`), as committed on its default branch. `engine.schedules`
   reconciles one Temporal Schedule per (repo, team), ID `schedule/<repo>/<team>`: created, updated through
   `handle.update()`, or deleted to match the config, whenever `factory engine upgrade` runs or the config changes.
+  An unchanged schedule is left alone and not reported: the server keeps a cron as calendars, so each schedule
+  carries a digest of what reconcile built in its action's memo, and only a differing digest is updated.
 - **Overlap policy `SKIP`** on ticks (a tick takes a second; the team workflow already serialises the runs).
 - **Catchup window = one day:** a laptop that slept through 02:00 runs when it wakes; a run missed by more than a
   day is dropped, not replayed.

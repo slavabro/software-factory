@@ -5,12 +5,20 @@ engine's time zone (engine.toml `time_zone`, default the home machine's; Tempora
 overlap SKIP (a tick takes a second; the team serialises its runs), catchup window one day (a laptop that slept
 through the time runs once on waking), jitter 5 minutes. New schedules start paused until the team has run once by
 hand. Reconciling creates, updates (keeping paused and its note) and deletes schedules to match the config. A repo
-that can't be read this time (no network, a broken config) keeps its schedules untouched and is reported."""
+that can't be read this time (no network, a broken config) keeps its schedules untouched and is reported.
+
+An unchanged schedule is left alone and not reported. The server keeps a cron as calendars, so the schedule as
+described can't be compared with the one built here; instead each schedule carries a digest of what reconcile built
+(`spec_digest`, in its action's memo, the one part of a schedule an update can change and a describe returns as
+given), and only a schedule whose digest differs is updated. A change to `build` changes every digest, so each
+schedule is updated once."""
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -35,6 +43,7 @@ PREFIX = "schedule/"
 CATCHUP = timedelta(days=1)
 JITTER = timedelta(minutes=5)
 NEW_NOTE = "new: run the team once by hand (factory engine run-now), then resume"
+DIGEST = "factory_schedule"  # the action memo key holding `spec_digest`
 
 
 @dataclass(frozen=True)
@@ -92,8 +101,17 @@ def desired(settings: EngineSettings) -> Wanted:
     return out
 
 
+def spec_digest(schedule: Schedule) -> str:
+    """What reconcile set, as a digest: everything in the schedule but its state (paused and the note are the
+    team's) and the digest itself."""
+    action = schedule.action
+    assert isinstance(action, ScheduleActionStartWorkflow)
+    bare = replace(schedule, state=ScheduleState(), action=replace(action, memo=None))
+    return hashlib.sha256(repr(bare).encode()).hexdigest()[:16]
+
+
 def build(want: Desired, paused: bool, note: str, time_zone: str = "UTC") -> Schedule:
-    return Schedule(
+    schedule = Schedule(
         action=ScheduleActionStartWorkflow(
             "ScheduleTick", TickInput(ref=want.ref), id=f"tick/{want.ref.repo_name}/{want.ref.team}", task_queue=TASK_QUEUE
         ),
@@ -101,10 +119,26 @@ def build(want: Desired, paused: bool, note: str, time_zone: str = "UTC") -> Sch
         policy=SchedulePolicy(overlap=ScheduleOverlapPolicy.SKIP, catchup_window=CATCHUP),
         state=ScheduleState(paused=paused, note=note),
     )
+    assert isinstance(schedule.action, ScheduleActionStartWorkflow)
+    schedule.action.memo = {DIGEST: spec_digest(schedule)}
+    return schedule
+
+
+def described_digest(client: Client, schedule: Schedule) -> str | None:
+    """The digest a schedule on the server carries; None for one made before schedules carried it."""
+    action = schedule.action
+    raw = action.memo.get(DIGEST) if isinstance(action, ScheduleActionStartWorkflow) and action.memo else None
+    if raw is None:
+        return None
+    try:
+        value = client.data_converter.payload_converter.from_payload(raw, str)
+    except Exception:  # noqa: BLE001 — a memo someone else wrote: not ours, so update it
+        return None
+    return value if isinstance(value, str) else None
 
 
 async def reconcile(client: Client, settings: EngineSettings) -> list[str]:
-    want = desired(settings)
+    want = await asyncio.to_thread(desired, settings)  # git fetches: off the event loop (the desk shares it)
     have = {s.id async for s in await client.list_schedules() if s.id.startswith(PREFIX)}
     report = [f"left {name}'s schedules alone: {why}" for name, why in sorted(want.unreadable.items())]
     for sid, w in sorted(want.schedules.items()):
@@ -114,12 +148,19 @@ async def reconcile(client: Client, settings: EngineSettings) -> list[str]:
                 report.append(f"created {sid} ({w.cron}, paused until a first run by hand)")
                 continue
 
-            def update(inp: ScheduleUpdateInput, w: Desired = w) -> ScheduleUpdate:
+            changed: list[bool] = []
+
+            def update(inp: ScheduleUpdateInput, w: Desired = w, changed: list[bool] = changed) -> ScheduleUpdate | None:
                 state = inp.description.schedule.state  # keep paused and its note: the team's, not the config's
-                return ScheduleUpdate(schedule=build(w, paused=state.paused, note=state.note or "", time_zone=settings.time_zone))
+                new = build(w, paused=state.paused, note=state.note or "", time_zone=settings.time_zone)
+                if described_digest(client, inp.description.schedule) == spec_digest(new):
+                    return None  # unchanged: left alone
+                changed.append(True)
+                return ScheduleUpdate(schedule=new)
 
             await client.get_schedule_handle(sid).update(update)
-            report.append(f"updated {sid} ({w.cron})")
+            if changed:
+                report.append(f"updated {sid} ({w.cron})")
         except RPCError as e:  # e.g. a cron the server refuses: report it, carry on with the rest
             report.append(f"could not set {sid} ({w.cron}): {e.message}")
     kept = tuple(f"{PREFIX}{name}/" for name in want.unreadable)

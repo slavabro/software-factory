@@ -11,6 +11,7 @@ import http.server
 import io
 import os
 import socket
+import subprocess
 import tempfile
 import threading
 import time
@@ -122,6 +123,21 @@ class RenderTest(unittest.TestCase):
             self.assertNotIn("<script", html)
             self.assertIn("&lt;script&gt;", html)
 
+    def test_change_pages_escape_what_they_show_and_need_no_script(self):
+        deploy = ops.DeployRun("20261118T090000Z", SCRIPT, "failed", 2, {"source": SCRIPT, "branch": SCRIPT})
+        plan = ops.DeployPlan(SCRIPT, "a" * 40, SCRIPT, "b1", "c" * 40, None)
+        live = pages.Live(snapshot((team(True, note=SCRIPT),)), pollers={"b1": NOW})
+        for html in (pages.deploy_page(self.settings, deploy), pages.confirm_deploy(self.settings, plan, "f"),
+                     pages.engine_page(self.settings, live, plan, [deploy], "f"),
+                     pages.confirm_remove_repo(self.settings, live, SCRIPT, "f"),
+                     pages.error_page(self.settings, "Not done", SCRIPT),
+                     pages.team_page(self.settings, live, team(True, note=SCRIPT), REF.workflow_id, "f",
+                                     pages.team_notice("pause", team(True, note=SCRIPT), live, self.settings))):
+            self.assertNotIn("<script", html)
+            self.assertIn("&lt;script&gt;", html)
+        self.assertIn('data-state="failed"><svg', pages.deploy_page(self.settings, deploy))
+        self.assertIn("<span>Failed (exit 2)</span>", pages.deploy_page(self.settings, deploy))
+
     def test_needs_you_lists_new_teams_and_teams_paused_after_failures_with_the_note(self):
         new = team(True, note=schedules.NEW_NOTE)
         failing = replace(team(True, note="paused after 3 failed runs in a row; last: setup broke", failures=3),
@@ -231,8 +247,10 @@ class Isolated:
 class Served:
     """A desk on a free port in this process, and a client that can set Host and Cookie."""
 
-    def serve(self, case: unittest.TestCase, settings: EngineSettings) -> None:
-        self.desk = Desk(load_settings=lambda: settings, github=repos.GitHub())
+    def serve(self, case: unittest.TestCase, settings: EngineSettings | None = None) -> None:
+        """With `settings` fixed, else read from engine.toml at each request (as the desk does)."""
+        load = settings_mod.load if settings is None else (lambda: settings)
+        self.desk = Desk(load_settings=load, github=repos.GitHub())
         self.server = make_server(self.desk, 0)
         self.port = self.server.server_port
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -242,23 +260,47 @@ class Served:
         case.addCleanup(self.server.shutdown)
         self.cookie = ""
 
-    def get(self, target: str, host: str | None = None, cookie: str | None = None,
-            method: str = "GET") -> tuple[int, dict[str, str], str]:
+    def get(self, target: str, host: str | None = None, cookie: str | None = None, method: str = "GET",
+            origin: str | None = None, body: bytes = b"") -> tuple[int, dict[str, str], str]:
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=60)
         conn.putrequest(method, target, skip_host=True)
         conn.putheader("Host", host or f"localhost:{self.port}")
         if cookie if cookie is not None else self.cookie:
             conn.putheader("Cookie", cookie if cookie is not None else self.cookie)
-        conn.endheaders()
+        if origin is not None:
+            conn.putheader("Origin", origin)
+        if method == "POST":
+            conn.putheader("Content-Type", "application/x-www-form-urlencoded")
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body or None)
         resp = conn.getresponse()
-        body = resp.read().decode()
+        text = resp.read().decode()
         conn.close()
-        return resp.status, {k.lower(): v for k, v in resp.getheaders()}, body
+        return resp.status, {k.lower(): v for k, v in resp.getheaders()}, text
 
     def sign_in(self) -> None:
         status, headers, _ = self.get(f"/?token={install.desk_token()}", cookie="")
         assert status == 303, status
         self.cookie = headers["set-cookie"].split(";")[0]
+
+    def form(self) -> str:
+        return desk_server.form_token(install.desk_token())
+
+    def post(self, action: str, origin: str | None = "", token: str | None = "",
+             **fields: str) -> tuple[int, dict[str, str], str]:
+        """POST a change as the desk's own page does: its Origin and form token unless told otherwise."""
+        origin = f"http://localhost:{self.port}" if origin == "" else origin
+        token = self.form() if token == "" else token
+        body = urlencode({**({"form": token} if token is not None else {}), **fields}).encode()
+        return self.get(f"/act/{action}", method="POST", origin=origin, body=body)
+
+    def follow(self, action: str, **fields: str) -> str:
+        """POST a change, check it redirects, and load the page it redirects to."""
+        status, headers, body = self.post(action, **fields)
+        assert status == 303, (status, body)
+        status, _, body = self.get(headers["location"])
+        assert status == 200, (status, body)
+        return body
 
 
 class SafetyTest(unittest.TestCase, Isolated, Served):
@@ -269,8 +311,9 @@ class SafetyTest(unittest.TestCase, Isolated, Served):
         self.repo, self.state, tmp = make_repo("true")
         self.addCleanup(tmp.cleanup)
         self.addCleanup(os.environ.pop, "FACTORY_ENGINE_STATE", None)
-        self.settings = EngineSettings(repos=(str(self.repo),), time_zone="UTC", server_port=1)  # nothing listens
-        self.serve(self, self.settings)
+        install.SETTINGS.write_text(f'repos = ["{self.repo}"]\ntime_zone = "UTC"\nserver_port = 1\n')  # nothing listens
+        self.settings = settings_mod.load()
+        self.serve(self)
 
     def test_a_request_never_makes_the_token(self):
         status, _, body = self.get("/?token=anything")
@@ -357,7 +400,174 @@ class SafetyTest(unittest.TestCase, Isolated, Served):
         self.assertFalse([h for h in headers if h.startswith("access-control-")])
         self.assertIn('data-state="stopped"', body)  # the server is down: the page says so, in a word and a shape
         self.assertIn("<span>Engine stopped</span>", body)
-        self.assertEqual(self.get("/", method="POST")[0], 405)  # actions are step 2
+        self.assertEqual(self.get("/", method="PUT")[0], 405)
+
+    def test_a_change_needs_the_desks_exact_origin(self):
+        self.sign_in()
+        for origin in (None, "null", f"http://localhost:{self.port + 1}", f"http://127.0.0.1:{self.port}",
+                       f"https://localhost:{self.port}", "http://evil.example", f"http://localhost:{self.port}/"):
+            status, _, body = self.post("spend-off", origin=origin)
+            self.assertEqual(status, 403, origin)
+            self.assertIn("Origin", body)
+        self.assertTrue(settings_mod.load().unattended)  # nothing changed
+        self.assertEqual(ops.read_actions(self.settings), [])
+
+    def test_a_change_needs_the_form_token(self):
+        self.sign_in()
+        for token in (None, " ", "0" * 64, desk_server.cookie_value(install.desk_token()), install.desk_token()):
+            status, _, body = self.post("spend-off", token=token)  # None: no form token at all
+            self.assertEqual(status, 403, token)
+            self.assertIn("form", body)
+        self.assertEqual(self.get("/act/spend-off", method="POST", origin=f"http://localhost:{self.port}",
+                                  body=b"form=" + self.form().encode(), cookie="")[0], 403)  # and the cookie
+
+    def test_the_spend_switch_asks_before_turning_on_and_reads_back_what_changed(self):
+        self.sign_in()
+        overview = self.follow("spend-off")
+        self.assertFalse(settings_mod.load().unattended)
+        self.assertIn('class="notice"', overview)
+        self.assertIn('data-state="paused"><svg', overview.split('class="notice"')[1])  # a shape and a word
+        self.assertIn("Unattended agent runs are off", overview)
+
+        status, headers, _ = self.post("spend-on")  # not confirmed: to the confirm page, nothing changed
+        self.assertEqual((status, headers["location"]), (303, "/confirm?action=spend-on"))
+        self.assertFalse(settings_mod.load().unattended)
+        status, _, confirm = self.get(headers["location"])
+        self.assertEqual(status, 200)
+        self.assertIn('action="/act/spend-on"', confirm)
+        self.assertIn('name="confirmed" value="yes"', confirm)
+        self.assertIn(f'name="form" value="{self.form()}"', confirm)
+        self.assertIn("spends money", confirm)
+        self.assertNotIn("<script", confirm)
+
+        overview = self.follow("spend-on", confirmed="yes")
+        self.assertTrue(settings_mod.load().unattended)
+        self.assertIn("Unattended agent runs are on", overview)
+        log = ops.read_actions(self.settings)
+        self.assertEqual([(c.who, c.action, c.before, c.after) for c in log],
+                         [("desk", "spend", True, False), ("desk", "spend", False, True)])
+
+    def test_run_now_confirms_and_says_it_would_stop_at_once_while_spend_is_off(self):
+        self.sign_in()
+        install.set_setting("unattended", False)
+        status, headers, _ = self.post("run-now", team="team/demo/qa")
+        self.assertEqual(status, 303)
+        status, _, confirm = self.get(headers["location"])
+        self.assertEqual(status, 200)
+        self.assertIn("demo · qa", confirm)
+        self.assertIn("would stop at once", confirm)
+        self.assertIn('data-state="paused"><svg', confirm)
+        install.set_setting("unattended", True)
+        self.assertNotIn("would stop at once", self.get(headers["location"])[2])
+        self.assertEqual(self.get("/confirm?action=run-now&team=team/demo/nobody")[0], 404)
+
+    def test_a_change_the_engine_cant_take_is_a_page_with_the_reason(self):
+        self.sign_in()
+        status, _, body = self.post("pause", team="team/demo/qa", note="holiday")
+        self.assertEqual(status, 503)
+        self.assertIn("not answering", body)
+        self.assertIn('data-state="failed"><svg', body)
+        self.assertIn("<span>Not done</span>", body)
+        self.assertNotIn("Traceback", body)
+        status, _, body = self.post("pause", team="team/demo/nobody")
+        self.assertEqual(status, 409)
+        self.assertIn("no such team", body)
+        status, _, body = self.post("add-repo", path="  ")
+        self.assertEqual(status, 409)
+        self.assertIn("give the path", body)
+        status, _, body = self.post("remove-repo", entry="/not/one", confirmed="yes")
+        self.assertEqual(status, 409)
+        self.assertEqual(self.post("format-disk")[0], 404)
+
+    def source_checkout(self, script: str) -> Path:
+        """A source checkout whose `home/bin/factory` is `script`, recorded as the one deploys come from, and a
+        current build made from an older commit."""
+        checkout = self.base / "factory"
+        factory = checkout / "home" / "bin" / "factory"
+        factory.parent.mkdir(parents=True)
+        factory.write_text("#!/bin/sh\n" + script)
+        factory.chmod(0o755)
+        git("init", "-q", "-b", "main", str(checkout), cwd=self.base)
+        for key, value in (("user.email", "t@example.com"), ("user.name", "t"), ("commit.gpgsign", "false")):
+            git("config", key, value, cwd=checkout)
+        git("add", ".", cwd=checkout)
+        git("commit", "-qm", "init", cwd=checkout)
+        install.SOURCE.write_text(str(checkout) + "\n")
+        (install.BUILDS / "b1").mkdir(parents=True)
+        (install.BUILDS / "b1" / install.COMMIT).write_text("0ld\n")
+        install.CURRENT.write_text("b1")
+        return checkout
+
+    def deploy_page(self, location: str, until: str) -> str:
+        for _ in range(100):
+            status, _, body = self.get(location)
+            self.assertEqual(status, 200)
+            if until in body:
+                return body
+            time.sleep(0.1)
+        self.fail(f"the deploy page never said {until}: {body}")
+
+    def test_deploy_confirms_runs_the_checkouts_upgrade_and_shows_its_log_by_id(self):
+        self.sign_in()
+        self.source_checkout('echo "upgrade asked: $*"\necho "<b>built</b>"\n')
+        engine = self.get("/engine")[2]
+        self.assertIn('action="/confirm"', engine)
+        self.assertIn('name="action" value="deploy"', engine)
+        status, headers, _ = self.post("deploy")
+        self.assertEqual((status, headers["location"]), (303, "/confirm?action=deploy"))
+        confirm = self.get("/confirm?action=deploy")[2]
+        self.assertIn("factory engine upgrade", confirm)
+        self.assertIn("0ld", confirm)
+
+        status, headers, _ = self.post("deploy", confirmed="yes")
+        self.assertEqual(status, 303)
+        location = headers["location"]
+        self.assertRegex(location, r"^/deploy\?id=\d{8}T\d{6}Z$")
+        page = self.deploy_page(location, "<span>Deployed</span>")
+        self.assertIn('data-state="done"><svg', page)
+        self.assertIn("upgrade asked: engine upgrade", page)
+        self.assertIn("&lt;b&gt;built&lt;/b&gt;", page)  # the log is text
+        self.assertNotIn(str(self.state), page)  # a deploy is found by its ID, the page never names its log's path
+        (change,) = [c for c in ops.read_actions(self.settings) if c.action == "deploy"]
+        self.assertEqual((change.who, change.before), ("desk", "0ld"))
+        for target in ("/deploy?id=../../secret", "/deploy?id=20261118T000000Z", f"/deploy?path={self.state}"):
+            self.assertEqual(self.get(target)[0], 404, target)
+
+    def test_a_failed_upgrade_reads_failed_with_its_exit_status(self):
+        self.sign_in()
+        self.source_checkout('echo "no docker"\nexit 3\n')
+        status, headers, _ = self.post("deploy", confirmed="yes")
+        page = self.deploy_page(headers["location"], "Failed (exit 3)")
+        self.assertIn('data-state="failed"><svg', page)
+
+    def test_a_second_deploy_is_refused_while_one_runs(self):
+        self.sign_in()
+        self.source_checkout('sleep 30\n')
+        with install.deploy_lock("upgrade"):
+            status, _, body = self.post("deploy", confirmed="yes")
+            self.assertEqual(status, 409)
+            self.assertIn(f"upgrade (pid {os.getpid()})", body)
+            self.assertNotIn('value="deploy"', self.get("/engine")[2])  # not offered meanwhile
+            self.assertEqual(self.get("/confirm?action=deploy")[0], 409)
+        # one the desk started, before it holds the lock (the fake upgrade never takes it)
+        status, headers, _ = self.post("deploy", confirmed="yes")
+        self.assertEqual(status, 303)
+        run = ops.read_deploy(self.settings, headers["location"].rpartition("=")[2])
+        assert run is not None
+        self.addCleanup(lambda: os.killpg(run.meta["pid"], 9) if ops._alive(run.meta["pid"]) else None)
+        status, _, body = self.post("deploy", confirmed="yes")
+        self.assertEqual(status, 409)
+        self.assertIn("is running", body)
+
+    def test_nothing_to_deploy_when_the_build_is_the_checkouts_head(self):
+        self.sign_in()
+        checkout = self.source_checkout("true\n")
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=checkout, capture_output=True, text=True).stdout
+        (install.BUILDS / "b1" / install.COMMIT).write_text(head)
+        self.assertIn("nothing to deploy", self.get("/engine")[2])
+        status, _, body = self.post("deploy", confirmed="yes")
+        self.assertEqual(status, 409)
+        self.assertIn("already the source checkout", body)
 
     def test_logs_and_notebooks_are_served_by_id_only(self):
         self.sign_in()
@@ -406,7 +616,7 @@ class DeskServerTest(unittest.IsolatedAsyncioTestCase, Isolated, Served):
                                     f"server_port = {port}\n")
         self.settings = settings_mod.load()
         self.ref = TeamRef(repo=str(self.repo.resolve()), repo_name="demo", team="qa")
-        self.serve(self, self.settings)
+        self.serve(self)  # engine.toml read at each request, as the desk does
         await asyncio.to_thread(self.sign_in)
 
     async def page(self, target: str) -> str:
@@ -488,6 +698,77 @@ class DeskServerTest(unittest.IsolatedAsyncioTestCase, Isolated, Served):
         self.assertIn('data-state="paused"', team_page)
         self.assertIn("pollers unreadable", engine)
         self.assertIn("<span>Reachable</span>", engine)
+
+    async def scheduled(self) -> ops.ScheduleView:
+        snap = await ops.snapshot(self.client, settings_mod.load())
+        return next(s for s in snap.schedules if s.schedule_id == self.ref.schedule_id)
+
+    async def test_pause_resume_and_run_now_from_the_desk(self):
+        await ops.reconcile(self.client, self.settings)  # created paused
+        page = await asyncio.to_thread(self.follow, "resume", team=self.ref.workflow_id, note="first run was good")
+        s = await self.scheduled()
+        self.assertEqual((s.paused, s.note), (False, "first run was good"))
+        notice = page.split('class="notice"')[1].split("</p>")[0]
+        self.assertIn('data-state="active"><svg', notice)
+        self.assertIn("its schedule is active (note: first run was good)", notice)
+        self.assertIn('action="/act/pause"', page)  # now offers the opposite
+
+        page = await asyncio.to_thread(self.follow, "pause", team=self.ref.workflow_id, note="")
+        s = await self.scheduled()
+        self.assertEqual((s.paused, s.note), (True, "paused by hand"))
+        self.assertIn("its schedule is paused (note: paused by hand)", page)
+
+        status, headers, _ = await asyncio.to_thread(self.post, "run-now", team=self.ref.workflow_id)
+        self.assertEqual(status, 303)
+        self.assertTrue(headers["location"].startswith("/confirm?"))
+        page = await asyncio.to_thread(self.follow, "run-now", team=self.ref.workflow_id, confirmed="yes")
+        self.addAsyncCleanup(self.client.get_workflow_handle(self.ref.workflow_id).terminate, "test over")
+        snap = await ops.snapshot(self.client, self.settings)
+        self.assertEqual([r.workflow_id for r in snap.open_runs], [self.ref.workflow_id])
+        self.assertIn("demo · qa is running now", page)  # no worker here: it stays open
+        log = ops.read_actions(self.settings)
+        self.assertEqual([(c.who, c.action) for c in log if c.who == "desk"],
+                         [("desk", "resume"), ("desk", "pause"), ("desk", "run-now")])
+
+    async def test_add_a_repo_needs_its_factory_toml_and_remove_lists_what_goes(self):
+        await ops.reconcile(self.client, self.settings)
+        other, _, tmp = make_repo("true")
+        self.addCleanup(tmp.cleanup)
+        os.environ["FACTORY_ENGINE_STATE"] = str(self.state)  # make_repo pointed it at its own
+        (other / ".factory.toml").unlink()
+        git("commit", "-qam", "opt out", cwd=other)
+        git("push", "-q", "origin", "main", cwd=other)
+        status, _, body = await asyncio.to_thread(self.post, "add-repo", path=str(other))
+        self.assertEqual(status, 409)
+        self.assertIn("not opted in (no .factory.toml on its default branch)", body)
+        self.assertEqual(settings_mod.load().repos, (str(self.repo),))
+
+        await ops.run_now(self.client, self.settings, self.ref)
+        self.addAsyncCleanup(self.client.get_workflow_handle(self.ref.workflow_id).terminate, "test over")
+        entry = str(self.repo)
+        status, headers, _ = await asyncio.to_thread(self.post, "remove-repo", entry=entry)
+        self.assertEqual(status, 303)
+        confirm = await self.page(headers["location"])
+        self.assertIn("<code>schedule/demo/qa</code>", confirm)
+        self.assertIn("Runs still open", confirm)
+        self.assertIn('data-state="running"><svg', confirm)
+        self.assertIn("team/demo/qa", confirm)
+        self.assertEqual(settings_mod.load().repos, (entry,))  # nothing changed yet
+
+        page = await asyncio.to_thread(self.follow, "remove-repo", entry=entry, repo="demo", confirmed="yes")
+        self.assertEqual(settings_mod.load().repos, ())
+        self.assertEqual((await ops.snapshot(self.client, settings_mod.load())).schedules, ())
+        self.assertIn("<span>Removed</span>", page)
+        self.assertIn("1 of its runs are still open: they finish", page)
+
+        page = await asyncio.to_thread(self.follow, "add-repo", path=entry)
+        self.assertIn("<span>Added</span>", page)
+        self.assertIn("demo is one of the engine&#x27;s repos", page)
+        self.assertIn("paused until each team has run once by hand", page)
+        s = await self.scheduled()
+        self.assertEqual((s.paused, s.note), (True, schedules.NEW_NOTE))
+        self.assertEqual([(c.who, c.action) for c in ops.read_actions(self.settings) if c.action.endswith("-repo")],
+                         [("desk", "remove-repo"), ("desk", "add-repo")])
 
     async def test_a_repo_name_any_config_allows_is_found_by_lookup(self):
         (self.repo / ".factory.toml").write_text((self.repo / ".factory.toml").read_text()
