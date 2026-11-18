@@ -20,7 +20,7 @@ from temporalio.testing import ActivityEnvironment
 from engine import process
 from engine import settings as settings_mod
 from engine.activities import agent, repo as repo_acts
-from engine.activities.teams import TeamActivities
+from engine.activities.teams import TeamActivities, team_dir
 from engine.models import OutcomeInput, ResolveInput, StepInput, TeamRef
 from engine.activities.agent import slept_marker
 from engine.settings import EngineSettings
@@ -243,7 +243,7 @@ class RecordOutcomeTest(unittest.IsolatedAsyncioTestCase):
         await self.record("failed", "same")
         again = await self.record("failed", "same")
         self.assertEqual(again.consecutive_failures, 1)
-        notebook = (self.acts._team_dir(self.ref) / "notebook.md").read_text()
+        notebook = (team_dir(self.acts.settings, self.ref) / "notebook.md").read_text()
         self.assertEqual(notebook.count("## run"), 1)
 
     async def test_a_success_resets_the_count(self):

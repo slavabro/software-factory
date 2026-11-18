@@ -6,7 +6,12 @@ server_port = 7243        # host port of the engine's own Temporal server (conta
 ui_port = 8243
 unattended = true         # false: no team starts an agent session (the spend switch)
 time_zone = "Asia/Jerusalem"  # the teams' cron schedules are in this zone; default: this machine's
+desk_port = 8245          # the Factory Desk's port on 127.0.0.1 (docs/designs/desk.md)
+source = "~/Dev/software-factory"  # the checkout install / upgrade last ran from (they write it); the desk deploys it
 ```
+
+The file is machine-written (`sfactory/engine.py`'s settings writer: install, the CLI and the desk), so it keeps no
+comments: this docstring is its reference.
 """
 
 from __future__ import annotations
@@ -30,7 +35,9 @@ NAMESPACE = "factory"
 TASK_QUEUE = "factory"
 DEPLOYMENT = "factory-engine"
 SEARCH_ATTRIBUTES = ("FactoryRepo", "FactoryTeam")  # Keyword, registered by the setup container
-KEYS = {"repos", "server_host", "server_port", "ui_port", "unattended", "search_attributes", "time_zone"}
+KEYS = {
+    "repos", "server_host", "server_port", "ui_port", "unattended", "search_attributes", "time_zone", "desk_port", "source",
+}
 
 
 def local_time_zone() -> str:
@@ -54,6 +61,8 @@ class EngineSettings:
     unattended: bool = True
     search_attributes: bool = True  # tests run without them (the test server has none registered)
     time_zone: str = field(default_factory=local_time_zone)  # what the teams' cron schedules mean
+    desk_port: int = 8245
+    source: str = ""  # the checkout to deploy from; empty until install or upgrade records it
     state: Path = field(default_factory=default_state)
 
     @property

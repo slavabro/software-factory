@@ -27,7 +27,7 @@ class EngineInstallTest(unittest.TestCase):
         patches = {
             "CONFIG_DIR": self.tmp / "config", "SHARE": self.tmp / "share", "BUILDS": self.tmp / "share" / "builds",
             "CURRENT": self.tmp / "share" / "current", "ENV_FILE": self.tmp / "config" / "engine.env",
-            "SETTINGS": self.tmp / "config" / "engine.toml",
+            "SETTINGS": self.tmp / "config" / "engine.toml", "DEPLOY_LOCK": self.tmp / "share" / "deploy.lock",
         }
         for name, value in patches.items():
             p = mock.patch.object(engine, name, value)
@@ -51,8 +51,79 @@ class EngineInstallTest(unittest.TestCase):
     def test_settings_keep_other_keys_and_add_repos_once(self):
         engine.CONFIG_DIR.mkdir(parents=True)
         engine.SETTINGS.write_text('repos = ["~/a"]\nserver_port = 17243\nunattended = false\n')
-        engine.write_settings(["~/b", "~/a"])
-        self.assertEqual(engine.settings(), {"repos": ["~/a", "~/b"], "server_port": 17243, "unattended": False})
+        before, after = engine.add_repos(["~/b", "~/a"])
+        self.assertEqual(before["repos"], ["~/a"])
+        self.assertEqual(engine.settings(), after)
+        self.assertEqual(after, {"repos": ["~/a", "~/b"], "server_port": 17243, "unattended": False})
+
+    def test_a_repo_is_one_entry_whether_typed_with_a_tilde_or_absolute(self):
+        engine.add_repos(["~/Dev/x"])
+        engine.add_repos([str(Path.home() / "Dev" / "x")])
+        self.assertEqual(engine.settings()["repos"], ["~/Dev/x"])
+        engine.remove_repo(str(Path.home() / "Dev" / "x"))
+        self.assertEqual(engine.settings()["repos"], [])
+
+    def test_removing_a_repo_keeps_the_rest_and_an_unknown_one_is_refused(self):
+        engine.add_repos(["~/a", "~/b"])
+        engine.set_setting("unattended", False)
+        before, after = engine.remove_repo("~/a")
+        self.assertEqual((before["repos"], after), (["~/a", "~/b"], {"repos": ["~/b"], "unattended": False}))
+        with self.assertRaises(KeyError):
+            engine.remove_repo("~/a")
+        self.assertEqual(engine.settings(), {"repos": ["~/b"], "unattended": False})  # a refused change writes nothing
+
+    def test_set_a_key_and_odd_strings_round_trip(self):
+        engine.set_setting("desk_port", 9000)
+        engine.set_setting("source", 'C:\\a "quoted"\npath')
+        self.assertEqual(engine.settings(), {"desk_port": 9000, "source": 'C:\\a "quoted"\npath'})
+
+    def test_the_settings_write_is_atomic_and_keeps_the_file_mode(self):
+        engine.add_repos(["~/a"])
+        os.chmod(engine.SETTINGS, 0o600)
+        with mock.patch.object(engine.os, "replace", side_effect=OSError("disk full")), self.assertRaises(OSError):
+            engine.add_repos(["~/b"])
+        self.assertEqual(engine.settings()["repos"], ["~/a"])  # the old file stands whole
+        self.assertEqual(sorted(p.name for p in engine.CONFIG_DIR.iterdir()), ["engine.toml", "engine.toml.lock"])
+        engine.add_repos(["~/b"])
+        self.assertEqual(stat.S_IMODE(engine.SETTINGS.stat().st_mode), 0o600)
+
+    def test_writers_at_once_lose_no_change(self):
+        import threading
+
+        threads = [threading.Thread(target=engine.add_repos, args=([f"~/r{i}"],)) for i in range(12)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertEqual(sorted(engine.settings()["repos"]), sorted(f"~/r{i}" for i in range(12)))
+
+    def test_paths_under_home_are_kept_in_tilde_form(self):
+        self.assertEqual(engine.home_form(Path.home() / "Dev" / "software-factory"), "~/Dev/software-factory")
+        self.assertEqual(engine.home_form(Path("/opt/factory")), str(Path("/opt/factory").resolve()))
+
+    def test_upgrade_records_its_checkout_as_the_source_and_holds_the_deploy_lock(self):
+        held = []
+        with mock.patch.object(engine, "server_up"), \
+             mock.patch.object(engine, "deploy", lambda: held.append(engine.deploy_running()) or []):
+            self.assertEqual(engine.main(["upgrade"]), 0)
+        self.assertEqual(engine.settings()["source"], engine.home_form(engine.FACTORY))
+        self.assertTrue(held[0].startswith(f"pid {os.getpid()} "))
+        self.assertIsNone(engine.deploy_running())  # released when it ends
+
+    def test_a_second_deploy_is_refused_while_one_runs(self):
+        with engine.deploy_lock():
+            with mock.patch.object(engine, "server_up") as up, self.assertRaises(SystemExit) as caught:
+                engine.main(["upgrade"])
+            up.assert_not_called()
+            self.assertIn("another deploy is running (pid", str(caught.exception))
+            # Another process sees it too (flock is per open file, and goes with its holder).
+            probe = subprocess.run([sys.executable, "-c", (
+                "import fcntl, os, sys; fd = os.open(sys.argv[1], os.O_RDWR)\n"
+                "try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)\nexcept BlockingIOError: sys.exit(3)"),
+                str(engine.DEPLOY_LOCK)])
+            self.assertEqual(probe.returncode, 3)
+        with engine.deploy_lock():  # free again
+            pass
 
     def test_the_database_password_is_made_once_and_private(self):
         engine.ensure_env_file()
@@ -73,6 +144,21 @@ class EngineInstallTest(unittest.TestCase):
         self.assertEqual(engine.snapshot(repo), (build, path))  # same commit, same build, nothing new
         self.assertEqual(engine.installed_builds(), [build])
 
+    def test_each_build_records_the_latest_commit_it_was_taken_from(self):
+        repo = self.checkout()
+
+        def head() -> str:
+            return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True).stdout.strip()
+
+        build, path = engine.snapshot(repo)
+        self.assertEqual(engine.build_commit(build), head())
+        (repo / "docs/d.md").write_text("more docs\n")
+        git("commit", "-qam", "docs", cwd=repo)
+        self.assertEqual(engine.snapshot(repo), (build, path))  # docs only: the same build ...
+        self.assertEqual(engine.build_commit(build), head())  # ... now known to match the newer commit
+        self.assertEqual(engine.build_id(path), build)  # COMMIT is not an input of the Build ID
+        self.assertIsNone(engine.build_commit("no-such-build"))
+
     def test_a_docs_change_is_the_same_build_and_a_runner_change_is_not(self):
         repo = self.checkout()
         first = engine.build_id(repo)
@@ -90,7 +176,7 @@ class EngineInstallTest(unittest.TestCase):
         self.assertIn("PATH", spec["EnvironmentVariables"])
 
     def test_repos_are_stored_absolute_unless_typed_with_a_tilde(self):
-        engine.write_settings([".", "~/Dev/x"])
+        engine.add_repos([".", "~/Dev/x"])
         self.assertEqual(engine.settings()["repos"], [str(Path(".").resolve()), "~/Dev/x"])
 
     def test_an_interrupted_environment_build_is_redone_not_used(self):

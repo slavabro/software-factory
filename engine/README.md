@@ -8,7 +8,9 @@ standard-library runner (`plugins/factory/sfactory`), so it runs from the factor
 factory engine install --repo ~/Dev/FamilyOffice     # Docker project, this build's worker, schedules
 factory engine status                                # schedules, running teams, recent runs
 factory engine run-now --repo ~/Dev/FamilyOffice --team upgrade
-factory engine upgrade                               # deploy a new build; retire drained ones
+factory engine spend off                             # the spend switch: no new agent session starts
+factory engine repo add ~/Dev/OtherRepo              # needs a .factory.toml on its default branch; reconciles
+factory engine upgrade                               # deploy a new build; retire drained ones (one at a time)
 ```
 
 Each build is a frozen copy of the committed code under `~/.local/share/software-factory/engine/builds/<build>` with
@@ -26,7 +28,8 @@ its own virtualenv and worker service (`sfactory/engine.py`). For development, a
 | `engine/infra/` | the Docker Compose project: Temporal server, Postgres, UI, one-shot setup |
 | `engine/schedules.py` | Temporal Schedules reconciled from each repo's `.factory.toml` |
 | `engine/worker.py` | the worker (task queue `factory`, Worker Versioning, Build ID from the code) |
-| `engine/cli.py` | `signal`, `run-now`, `pause`, `resume`, `reconcile`, `status`, `build-id`, `set-current`, `drained` |
+| `engine/ops.py` | the reads (`snapshot`) and actions the CLI and the desk share; changes go to `state/actions.jsonl` |
+| `engine/cli.py` | `signal`, `run-now`, `pause`, `resume`, `reconcile`, `status`, `spend`, `repo`, `build-id`, `set-current`, `drained`: parsing and output only |
 | `engine/settings.py` | `~/.config/software-factory/engine.toml` |
 
 Tests (`cd engine && python -m unittest discover -s tests -t .`): workflows on the time-skipping test server,

@@ -49,10 +49,16 @@ class Wanted:
     unreadable: dict[str, str] = field(default_factory=dict)  # repo name → why its schedules were left alone
 
 
+def fetch_default(root: Path) -> None:
+    """Bring origin/<default> up to date (best effort: offline, the last fetched ref stands). Only actions fetch."""
+    branch = config.load(root).default_branch
+    subprocess.run(["git", "fetch", "--quiet", "origin", branch], cwd=root, capture_output=True, timeout=120)
+
+
 def committed_config(root: Path) -> tuple[str, object | None]:
-    """(repo name, its config on origin/<default>, fetched first), or (name, None) when it isn't opted in."""
+    """(repo name, its config on the already-fetched origin/<default>), or (name, None) when it isn't opted in.
+    Never fetches, so a read (status, the desk) stays local and quick."""
     local = config.load(root)
-    subprocess.run(["git", "fetch", "--quiet", "origin", local.default_branch], cwd=root, capture_output=True, timeout=120)
     ref = f"origin/{local.default_branch}"
     if subprocess.run(["git", "rev-parse", "--verify", "--quiet", ref], cwd=root, capture_output=True).returncode:
         raise ValueError(f"{ref} not found")
@@ -63,10 +69,12 @@ def committed_config(root: Path) -> tuple[str, object | None]:
 
 
 def desired(settings: EngineSettings) -> Wanted:
-    """Every scheduled team in the configured repos, as each repo's default branch configures it."""
+    """Every scheduled team in the configured repos, as each repo's default branch configures it (fetched first:
+    reconciling is an action)."""
     out = Wanted()
     for root in settings.repo_paths():
         try:
+            fetch_default(root)
             name, cfg = committed_config(root)
         except Exception as e:  # noqa: BLE001 — one repo's problem must not touch the others' schedules
             try:

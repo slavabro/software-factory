@@ -8,15 +8,21 @@ any time without ever running another build's code (Worker Versioning pins each 
     factory engine install [--repo PATH …]   server up, deploy this checkout's build, schedules from config
     factory engine upgrade                    deploy this checkout's build if it is new; retire drained builds
     factory engine start | stop               the containers and the workers
-    factory engine signal | run-now | pause | resume | reconcile | status | set-current | drained | build-id
-                                              the engine's own commands (engine/engine/cli.py)
+    factory engine signal | run-now | pause | resume | reconcile | status | spend on|off | repo add|remove PATH
+                   | set-current | drained | build-id
+                                              the engine's own commands (engine/engine/cli.py, on engine/ops.py)
+
+engine.toml has one writer, the functions under "settings" below (install, the engine's CLI and the desk call
+them); its keys are documented in engine/engine/settings.py. One deploy runs at a time (`deploy_lock`).
 
 Standard library only: everything Temporal is in the engine's virtualenv.
 """
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
+import json
 import os
 import plistlib
 import secrets
@@ -26,6 +32,8 @@ import sys
 import tempfile
 import time
 import tomllib
+from collections.abc import Callable, Iterator
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 FACTORY = Path(__file__).resolve().parents[3]  # the checkout this command runs from
@@ -33,12 +41,14 @@ CONFIG_DIR = Path(os.environ.get("FACTORY_ENGINE_CONFIG_DIR", "~/.config/softwar
 SHARE = Path(os.environ.get("FACTORY_ENGINE_HOME", "~/.local/share/software-factory/engine")).expanduser()
 BUILDS = SHARE / "builds"
 CURRENT = SHARE / "current"
+DEPLOY_LOCK = SHARE / "deploy.lock"  # held by whoever deploys: install, upgrade (the desk runs upgrade)
 ENV_FILE = CONFIG_DIR / "engine.env"
 SETTINGS = CONFIG_DIR / "engine.toml"
 COMPOSE = "engine/infra/docker-compose.yml"
 LABEL = os.environ.get("FACTORY_ENGINE_LABEL", "com.software-factory.engine")
 PROJECT = os.environ.get("FACTORY_ENGINE_PROJECT", "software-factory")  # Docker Compose project
 SNAPSHOT = ("engine", "runtime", "plugins/factory")  # what a build needs at run time
+COMMIT = "COMMIT"  # in each build: the commit it was snapshotted from (not an input of the Build ID)
 SHUTDOWN_ALLOWANCE = 90  # seconds a stopping worker gets: 10 s graceful + 30 s agent kill grace + margin
 
 # Build ID: the code the worker runs (docs/designs/engine.md, section 6): the engine, the runtime and the factory's
@@ -66,24 +76,115 @@ def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, text=True, **kw)
 
 
-def settings() -> dict:
-    return tomllib.loads(SETTINGS.read_text()) if SETTINGS.is_file() else {}
+# ---- settings: the one writer of engine.toml ----------------------------------------------------------------------
+
+def settings(path: Path | None = None) -> dict:
+    path = path or SETTINGS
+    return tomllib.loads(path.read_text()) if path.is_file() else {}
 
 
-def write_settings(repos: list[str]) -> None:
-    """engine.toml with `repos` added as absolute paths (a `~/…` path is kept as typed); other keys untouched. A
-    relative path would mean a different repo from every directory the engine runs in."""
-    current = settings()
-    known = list(current.get("repos", []))
-    for repo in (r if r.startswith("~") else str(Path(r).resolve()) for r in repos):
-        if repo not in known:
-            known.append(repo)
-    lines = [f"repos = [{', '.join(repr_toml(r) for r in known)}]"]
-    for key, value in current.items():
-        if key != "repos":
-            lines.append(f"{key} = {repr_toml(value)}")
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    SETTINGS.write_text("\n".join(lines) + "\n")
+def home_form(path: Path) -> str:
+    """`~/…` for a path under the home directory, else absolute."""
+    path = path.expanduser().resolve()
+    try:
+        return "~/" + str(path.relative_to(Path.home().resolve()))
+    except ValueError:
+        return str(path)
+
+
+def repo_entry(repo: str) -> str:
+    """How engine.toml keeps a repo: absolute (a relative path would mean a different repo from every directory the
+    engine runs in), or `~/…` as typed."""
+    return repo if repo.startswith("~") else str(Path(repo).resolve())
+
+
+def same_repo(a: str, b: str) -> bool:
+    return Path(a).expanduser().resolve() == Path(b).expanduser().resolve()
+
+
+@contextmanager
+def _locked(lock: Path, blocking: bool = True) -> Iterator[int]:
+    """An exclusive flock on `lock` (made if missing). It goes with the block or the process, so it is never left
+    stale. Not `blocking`: BlockingIOError when someone else holds it."""
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        try:
+            yield fd
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def write_atomic(path: Path, text: str, mode: int = 0o644) -> None:
+    """Write through a temp file in the same directory, then rename: a reader sees the old file or the new, never a
+    half-written one. An existing file keeps its permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, path.stat().st_mode & 0o7777 if path.exists() else mode)
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def dump_settings(data: dict) -> str:
+    """engine.toml's text: `repos` first, then the other keys in their order. Machine-written, so no comments (the
+    keys' reference is engine/engine/settings.py)."""
+    keys = (["repos"] if "repos" in data else []) + [k for k in data if k != "repos"]
+    return "".join(f"{k} = {repr_toml(data[k])}\n" for k in keys)
+
+
+def edit_settings(change: Callable[[dict], None], path: Path | None = None) -> tuple[dict, dict]:
+    """Apply `change` to engine.toml's values and write the result atomically, under a lock so two writers (the CLI,
+    the desk) never lose each other's change. Returns (before, after); an unchanged file is left alone."""
+    path = path or SETTINGS
+    with _locked(path.with_name(path.name + ".lock")):
+        before = settings(path)
+        after = tomllib.loads(dump_settings(before))  # a deep copy
+        change(after)
+        if after != before:
+            write_atomic(path, dump_settings(after))
+    return before, after
+
+
+def add_repos(repos: list[str], path: Path | None = None) -> tuple[dict, dict]:
+    """Add each repo that isn't there yet (see `repo_entry`); other keys untouched."""
+    def change(data: dict) -> None:
+        known = data.setdefault("repos", [])
+        for repo in map(repo_entry, repos):
+            if not any(same_repo(repo, k) for k in known):
+                known.append(repo)
+    return edit_settings(change, path)
+
+
+def remove_repo(repo: str, path: Path | None = None) -> tuple[dict, dict]:
+    """Drop the entries naming the same directory as `repo` (`~/x` and its absolute form alike); KeyError if none."""
+    def change(data: dict) -> None:
+        known = data.get("repos", [])
+        kept = [k for k in known if not same_repo(k, repo)]
+        if len(kept) == len(known):
+            raise KeyError(f"{repo} is not one of the engine's repos")
+        data["repos"] = kept
+    return edit_settings(change, path)
+
+
+def set_setting(key: str, value: bool | int | str, path: Path | None = None) -> tuple[dict, dict]:
+    def change(data: dict) -> None:
+        data[key] = value
+    return edit_settings(change, path)
+
+
+def record_source(source: Path = FACTORY) -> None:
+    """engine.toml `source`: the checkout install or upgrade runs from, the one the desk deploys."""
+    set_setting("source", home_form(source))
 
 
 def repr_toml(value) -> str:
@@ -91,7 +192,9 @@ def repr_toml(value) -> str:
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
-    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+    if isinstance(value, list):
+        return "[" + ", ".join(repr_toml(v) for v in value) + "]"
+    return json.dumps(str(value), ensure_ascii=False)  # JSON's string escapes are valid in a TOML basic string
 
 
 def ensure_env_file() -> None:
@@ -171,7 +274,16 @@ def snapshot(source: Path = FACTORY) -> tuple[str, Path]:
     else:
         BUILDS.mkdir(parents=True, exist_ok=True)
         staging.rename(target)
+    # The latest commit this build was taken from: a later commit that changes no versioned file is the same build.
+    head = subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
+    write_atomic(target / COMMIT, head.stdout.strip() + "\n")
     return build, target
+
+
+def build_commit(build: str) -> str | None:
+    """The commit a build was last snapshotted from; None for a build made before builds recorded it."""
+    path = BUILDS / build / COMMIT
+    return (path.read_text().strip() or None) if path.is_file() else None
 
 
 def ensure_venv(build_dir: Path) -> Path:
@@ -314,9 +426,7 @@ def deploy() -> list[str]:
         time.sleep(2)
     else:
         raise SystemExit(f"factory engine: build {build} never became current:\n{proc.stderr[-1500:]}")
-    tmp = CURRENT.with_suffix(".tmp")
-    tmp.write_text(build)
-    tmp.replace(CURRENT)
+    write_atomic(CURRENT, build)
     out.append(f"current build: {build}" + (f" (was {previous})" if previous and previous != build else ""))
     out += retire(python, keep=build)
     reconcile = engine_cli(python, "reconcile", capture=True)
@@ -345,10 +455,36 @@ def retire(python: Path, keep: str) -> list[str]:
     return out
 
 
+@contextmanager
+def deploy_lock() -> Iterator[None]:
+    """One deploy at a time on this machine (install, upgrade; the desk runs upgrade): a second is refused, not
+    queued. The lock goes with its process, so a deploy that crashed never blocks the next."""
+    with ExitStack() as held:
+        try:
+            fd = held.enter_context(_locked(DEPLOY_LOCK, blocking=False))
+        except BlockingIOError:
+            raise SystemExit(f"factory engine: another deploy is running ({deploy_running() or 'it just ended'}); "
+                             "try again when it has finished") from None
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid {os.getpid()} since {time.strftime('%Y-%m-%d %H:%M:%S')}\n".encode())
+        yield
+
+
+def deploy_running() -> str | None:
+    """Who holds the deploy lock ("pid N since T"), or None when no deploy runs: for a caller that must refuse
+    before it starts one (the desk)."""
+    try:
+        with _locked(DEPLOY_LOCK, blocking=False):
+            return None
+    except BlockingIOError:
+        return DEPLOY_LOCK.read_text().strip() or "pid unknown"
+
+
 def install(repos: list[str]) -> int:
     if not shutil.which("docker"):
         raise SystemExit("factory engine: Docker is required (the engine's Temporal runs in Docker)")
-    write_settings(repos)
+    add_repos(repos)
+    record_source()
     ensure_env_file()
     s = settings()
     for key, default in (("server_port", 7243), ("ui_port", 8243)):
@@ -372,11 +508,14 @@ def main(argv: list[str]) -> int:
     cmd, rest = argv[0], argv[1:]
     if cmd == "install":
         repos = [rest[i + 1] for i, a in enumerate(rest) if a == "--repo" and i + 1 < len(rest)]
-        return install(repos)
+        with deploy_lock():
+            return install(repos)
     if cmd == "upgrade":
-        server_up()
-        for line in deploy():
-            print(f"factory engine: {line}")
+        with deploy_lock():
+            record_source()
+            server_up()
+            for line in deploy():
+                print(f"factory engine: {line}")
         return 0
     if cmd == "start":
         server_up()
