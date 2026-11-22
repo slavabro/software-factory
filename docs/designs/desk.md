@@ -27,8 +27,9 @@ Semantics the page states where the button is:
 - **Remove a repo** deletes its schedules (reconcile) and lists the runs still open; they finish, nothing new starts.
   **Add a repo** requires a `.factory.toml` on its default branch, then reconciles (new schedules start paused).
 
-Out of scope: editing a team's schedule or prompt (the repo's `.factory.toml`, changed by PR); a cost view of its own
-(F-33's page); anything a product's own dashboards show.
+Out of scope: a cost view of its own (F-33's page); anything a product's own dashboards show. Designing processes
+(team schedules and prompts included, which are no longer `.factory.toml` keys) is the SDLC designer's job
+([sdlc.md](sdlc.md), D-6, D-10).
 
 ## How it is built
 
