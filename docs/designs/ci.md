@@ -20,6 +20,59 @@ list: the generated workflow, `factory ci local` and the gate all read `[ci.tier
 `sfactory/ci.py` (stdlib: `Ci`, `Tier`, `Gate`, `HostCi`, validation); `config.py` exposes `cfg.ci`, the engine's
 settings call the same `HostCi` loader.
 
+## Engine topology
+
+One engine per host: a Temporal server (Postgres-backed) with its own namespaces, one namespace per project. The
+host that runs a pool (Linux, systemd, Docker, no prod: the `no-prod` guard) runs its own engine and the `factory-ci`
+worker; a prod host runs its own, for its own work. A product's application Temporal is never shared with the
+factory's (engine.md section 1). Each host keeps working when another is down: the pool needs no other machine, and
+the route variables let `auto` fall back to hosted when the pool host is gone. The Factory Desk (F-25) lists every
+host's engine as a remote (name, address, health) and reads and acts on it through that engine's own `ops` layer; a
+host the Desk cannot reach shows as unreachable and nothing else changes.
+
+A CI-only engine needs the Temporal server, its database and one worker. Options: the single `temporal` binary with a
+SQLite file (one process, no Docker for the engine itself, though the host has Docker anyway for runners), or the
+full Docker Compose project the home machine uses (server, Postgres, UI, namespace setup). Recommended: the same
+Compose project with the worker and Desk service left off. One install path to test and upgrade (`factory engine
+install` on every host), real history retention, and the UI for a stuck runner. The single binary is the fallback
+for a box that cannot run Compose.
+
+## Credentials: a GitHub App, no personal token
+
+GitHub cannot create personal access tokens by API, and the old installer copied an admin's own `gh` login to the
+service user (an account-wide credential). Instead the factory uses a **GitHub App**:
+
+- **Registered once** by the owner through the app manifest flow: `factory ci app create` serves a one-shot local
+  page that posts the manifest (name, the permissions below, no webhook, not public) to GitHub; GitHub redirects back
+  with a code and the command exchanges it (`POST /app-manifests/{code}/conversions`) for the app id and private key.
+  The owner approves once in the browser. Nothing else is typed.
+- **Installed per repository** by the owner on GitHub (`factory ci app install` opens the page), selecting only the
+  repos that use CI. A repo without the installation has no pool.
+- **Short-lived tokens, minted on demand.** For each call the factory signs a JWT with the key and asks for an
+  installation access token scoped to that one repository and to the permissions the call needs (valid one hour,
+  cached in memory only, never written to disk or a job container). The signing uses `openssl dgst -sha256 -sign`
+  (standard library has no RSA; `openssl` is on every supported host).
+- **Required repository permissions** (checked against GitHub's "Permissions required for GitHub Apps" table):
+
+| Need | Permission | Access |
+|------|-----------|--------|
+| JIT runner registration, list and delete runners | Administration | write |
+| List and re-run workflow runs, list jobs, cancel, dispatch the probe | Actions | write |
+| Billing-refusal annotations on a check run | Checks | read |
+| `FACTORY_CI_*` repository variables | Variables | write |
+| (always granted) | Metadata | read |
+
+  Nothing on Contents, Pull requests or Secrets. Administration is the broad one (it also covers repo settings), so
+  the app is private, owned by the principal and installed only on repos they own.
+- **The private key lives on the pool host**, in the service user's home, mode 0600, so the pool and the route
+  activities work with no Desk and no other machine. Other hosts that only read status (`factory ci status`, `use`)
+  mint through their own key copy or ask the pool host; the key never goes to the Desk.
+- **The Desk shows per project**: installation present or missing, granted permissions against the required list (a
+  missing or extra one named in words), last token mint time and the call that used it, with links to GitHub to
+  install, change permissions or revoke. Permissions can only be changed on GitHub; the Desk never changes them.
+- `factory ci install` replaces the `gh` login hand-off: it checks the key file and the installation, and fails with
+  the one command to run (`factory ci app create|install`) when either is missing.
+
 ## The `[ci]` schema
 
 ### Repo: `.factory.toml`
@@ -65,6 +118,14 @@ requires = "all"               # all | [tier names]
 | `gate.requires` | `"all"` or list | `all` | `ci.gate.requires: unknown tier <x>` |
 | `guards`, `runners`, `cpus`, `memory`, `gate_runners`, … | | | `ci.<key> belongs to the host's engine.toml, not the repo` |
 
+Caching: `setup` keeps dependency caching where the repo already gets it. On hosted, `python` renders to setup-python
+plus setup-uv with the cache keyed on the repo's lock or requirements files (found by glob from the manifests the
+upgrade run already detects), `node` to setup-node with the package-manager cache. On the pool, runners are
+ephemeral, so the cache is the host's: a read-write uv and npm cache directory mounted into every runner (shared
+across pools of that host, content-addressed so repos cannot poison each other's builds beyond their own
+resolved hashes), and the image carries the base toolchain. A repo's own composite action stays usable as a plain
+`setup` command or in a `workflow = "own"` repo.
+
 Setup steps: only `postgres`, `node`, `python` (optionally `:version`) are named; anything else is a shell command.
 A bare version defaults from the repo's own pin (`.python-version`, `.node-version` or `.nvmrc`; none = refused, no
 guessing). `sfactory/ci_setup.py` is the one table: per name, the pinned GitHub action (hosted) and the shell form
@@ -106,7 +167,8 @@ once no older build is installed does the admin add the table by hand.
 | `factory ci check [--host]` | repo `[ci]`; `--host` adds `engine.toml` | validates both files (above), then proves the generated workflow files equal `render`'s output; exit 1 with the diff. Runs in the repo's `[verify]` so drift fails CI |
 | `factory ci render` | repo `[ci]` | writes `.github/workflows/factory-ci.yml` (router, optional reuse, one job per tier, the gate job named `gate.name`) and `factory-ci-probe.yml`; self-contained (the router is an inline step, nothing from the factory is needed in the repo). A fork's PR never routes to the pool; `workflow = "own"` skips it |
 | `factory ci local [--tiers a,b] [--no-docker]` | repo `[ci]` (+ host sizing if present) | the tiers in `needs` order in a throwaway container (working tree streamed in, own Postgres and ports), or directly with `--no-docker`; every tier runs even after one fails, a tier whose `needs` failed is shown `skipped`; summary with words (`ok`, `FAILED`, `skipped`), exit 1 on any failure; labelled a confidence check, not the gate |
-| `sudo factory ci install --repo PATH [--user NAME]` | both | host install: preflight, guards, service user, firewall unit, the CI worker unit, credential hand-off, image build; then the engine starts the pool. Idempotent, re-run updates |
+| `sudo factory ci install --repo PATH [--user NAME]` | both | host install: preflight, guards, service user, firewall unit, the CI worker unit, app key and installation check (above), image build; then the engine starts the pool. Idempotent, re-run updates |
+| `factory ci app create\|install\|status` | GitHub | the app registration, installation and permission check above; `status` prints granted vs required permissions |
 | `factory ci status` | both + GitHub + the engine | mode (default and live override), route, heartbeat age, per-pool runners up/busy, queue, peak CPU and memory per runner next to the caps, and a line `guards OFF: egress, no-prod` for every disabled guard; if the engine is unreachable it says so and prints the GitHub facts |
 | `factory ci use hosted\|self-hosted\|auto\|default` | GitHub | sets `FACTORY_CI_MODE` (`default` deletes it, so the file's `mode` applies) and re-runs runs stuck on the pool; `factory ci rescue` does only the re-run. Changes nothing in the repo |
 
@@ -139,6 +201,22 @@ engine's house rules (models in `engine.models`, activities by name with `result
 A worker crash resumes where it was; containers outlive the worker, and `adopt` counts them instead of starting
 duplicates. Status comes from Temporal (workflow queries, run results), not a journal. All routing facts stay in
 the repo variables so they work with no engine and no runner.
+
+## Factory Desk panel (F-25)
+
+One CI page per project on the Desk, built on F-25's `ops` layer and action log; there is no second settings writer
+and the Desk holds no credential. `ops` gains read functions that return dataclasses (the same ones `factory ci
+status` prints) and `use`/`rescue` actions; every action goes through it with who = desk and lands in
+`state/actions.jsonl`. It shows, in words and shapes, never colour alone:
+
+- mode (file default and live override) and route, heartbeat age;
+- pool runners up and busy per host, queue depth;
+- peak CPU and memory per runner next to the caps;
+- `guards OFF: egress, no-prod` as its own line whenever any guard is off;
+- app status: installation present, granted against required permissions, last token use, links to GitHub;
+- actions with confirmation pages like the other Desk actions: `use hosted|self-hosted|auto|default`, `rescue`.
+
+Sizing, guards and tiers are read-only on the page: they are files (`engine.toml`, `.factory.toml`).
 
 ## Findings from the first product that shape this
 
@@ -195,15 +273,24 @@ The old pool keeps serving until the new one carries its load; every step is rev
 2. FamilyOffice PR: `[ci] mode = "auto"`, `pool = "familyoffice-ci"` (the same label), tiers copied from `test.yml`
    and `run_tiers.sh`; `factory ci render` output is added under the new file names but **not yet enabled**
    (`workflow = "own"` until step 4), and `factory ci check` runs in its verify.
-3. `sudo factory ci install` beside the old units. New runners use a different name prefix and label key, so the old
-   manager neither counts nor stops them; both pools carry the one label, jobs go to whichever is idle. Set
-   `FACTORY_CI_MODE` to the current `CI_RUNNER` value with `factory ci use`; the new route and heartbeat variables
-   are written by the new pool, the old ones by the old.
-4. PR flips `workflow = "generated"` and deletes `runner.yml`, the tier plumbing in `test.yml`, `ci-probe.yml`,
-   `run_tiers.sh`. The gate name stays `CI OK`: branch protection is untouched. Revert this PR to roll back.
+3. `sudo factory ci install` beside the old units. One label, two managers: the new runners carry the same pool
+   label (`familyoffice-ci`) but a different name prefix and a different container label key, so the old manager
+   neither counts nor stops them and the new one does not count the old (adopt matches its own key only). Jobs go to
+   whichever runner is idle; capacity is briefly old plus new. Set `FACTORY_CI_MODE` to the current `CI_RUNNER`
+   value with `factory ci use`; the new route and heartbeat variables are written by the new pool, the old ones by
+   the old, so each generation's workflows read their own. The app (above) is created and installed first; the old
+   manager keeps its `gh` login until step 5.
+4. Before this step, record one full Tests run before and after in the PR: wall time of the whole run and of each
+   tier, on hosted and on the pool, old workflow against generated (`gh run view --json`). **Do not flip
+   `workflow = "generated"` if the generated run is slower** than the old one by more than the noise between two old
+   runs; fix `setup` (caches, preinstalled postgres on the pool image) until it is not, or keep `own`. FamilyOffice
+   uses its own setup actions (`setup-python-deps`: setup-python, uv with a cache keyed on `requirements.txt`;
+   `start-postgres`); those are the baseline the generated `python` and `postgres` setup must match.
+   The PR flips `workflow = "generated"` and deletes `runner.yml`, the tier plumbing in `test.yml`, `ci-probe.yml`,
+   `run_tiers.sh`, and replaces `tests/standalone/test_ci_runner_workflows.py` (it pins today's hand-written router, jobs and probe) with `factory ci check` in the verify: the generated output is the pin, and its golden tests live in the factory. Until this step the test stays as it is and passes, because the old workflows are untouched. The gate name stays `CI OK`: branch protection is untouched. Revert this PR to roll back.
 5. When `factory ci status` shows the new pool's runners online and a week of green gates, wait for the old runners
    to be idle, stop and remove the old units (`familyoffice-ci-runner`, `-firewall`; the new firewall unit has
-   the same rules under generic names), delete `CI_RUNNER*` variables and `.env.ci-runner`.
+   the same rules under generic names), delete `CI_RUNNER*` variables, `.env.ci-runner` and the old `gh` copy in the service user's home.
 
 ## What in `ci_runner.py` is FamilyOffice-specific
 
