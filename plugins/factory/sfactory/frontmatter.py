@@ -1,8 +1,9 @@
 """Flat YAML front matter without a YAML library: one `key: value` per line, values read as YAML 1.1 reads them.
 
 Task specs only need scalars. A value comes back as None, bool, int, float, datetime.date or str, the types
-`yaml.safe_load` gives, so a spec reads the same here and in any YAML tool. Anything richer (lists, nested maps,
-block scalars, anchors) is refused with the line, never guessed. `scalar()` writes a value plain when it reads back
+`yaml.safe_load` gives, so a spec reads the same here and in any YAML tool. A caller that asks for them also gets
+one-line flow sequences of scalars (`owners: [a, "b c"]`) as lists. Anything richer (nested lists or maps, block
+scalars, anchors) is refused with the line, never guessed. `scalar()` writes a value plain when it reads back
 unchanged, else double-quoted (JSON escapes are valid YAML).
 """
 
@@ -84,8 +85,37 @@ def _value(raw: str, where: str):
     return text
 
 
-def load(block: str, where: str = "front matter") -> dict:
-    """The mapping in a front matter block (the text between the `---` lines)."""
+def _sequence(raw: str, where: str) -> list:
+    """A one-line flow sequence of scalars: `[a, "b, c", 'd']`."""
+    text = raw.strip()
+    if not text.endswith("]"):
+        raise FrontMatterError(f"{where}: a list is one line, `[a, b]`")
+    items, item, quote = [], "", ""
+    for ch in text[1:-1]:
+        if quote:
+            item += ch
+            if ch == quote and not (quote == '"' and item.endswith('\\"')):  # `\"` stays inside
+                quote = ""
+        elif ch in "\"'":
+            item, quote = item + ch, ch
+        elif ch in "[]{}":
+            raise FrontMatterError(f"{where}: only a flat list of plain values is supported")
+        elif ch == ",":
+            items.append(item)
+            item = ""
+        else:
+            item += ch
+    if quote:
+        raise FrontMatterError(f"{where}: unclosed quote in the list")
+    if item.strip() or items:
+        items.append(item)
+    if any(not i.strip() for i in items):
+        raise FrontMatterError(f"{where}: empty item in the list")
+    return [_value(i, where) for i in items]
+
+
+def load(block: str, where: str = "front matter", sequences: bool = False) -> dict:
+    """The mapping in a front matter block (the text between the `---` lines); `sequences` also reads `[a, b]`."""
     data: dict = {}
     for n, line in enumerate(block.splitlines(), 1):
         if not line.strip() or line.lstrip().startswith("#"):
@@ -94,10 +124,13 @@ def load(block: str, where: str = "front matter") -> dict:
         here = f"{where} line {n}"
         if not sep or not KEY.fullmatch(key) or (rest and not rest.startswith(" ")):
             raise FrontMatterError(f"{here}: not a flat `key: value` line: {line!r}")
-        if rest.strip() in {"|", ">", "|-", ">-"} or rest.strip()[:1] in {"[", "{", "&", "*", "!"}:
-            raise FrontMatterError(f"{here}: only plain values are supported, got {rest.strip()!r}")
         if key in data:
             raise FrontMatterError(f"{here}: duplicate key `{key}`")
+        if sequences and rest.strip().startswith("["):
+            data[key] = _sequence(rest, here)
+            continue
+        if rest.strip() in {"|", ">", "|-", ">-"} or rest.strip()[:1] in {"[", "{", "&", "*", "!"}:
+            raise FrontMatterError(f"{here}: only plain values are supported, got {rest.strip()!r}")
         data[key] = _value(rest, here)
     return data
 

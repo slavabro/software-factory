@@ -61,4 +61,5 @@ the worked example.
 
 `[tasks] system = "factory"` (the default) uses this system; `system = "commands"` uses the repo's own `new` /
 `exists` commands instead (e.g. GitHub issues). `legacy_duplicate_ids` lists IDs that shipped twice before IDs
-were checked.
+were checked. `id_pattern` is what a task reference looks like in prose; capability specs, which must stay free of
+history, refuse it ([factory-toml.md](factory-toml.md)).

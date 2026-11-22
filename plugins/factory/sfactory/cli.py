@@ -6,6 +6,7 @@
     factory task ...                       the task system (`factory task --help`); with [tasks] system = "commands"
                                            only `new --title T --body-file F [--priority P]` and `exists QUERY`,
                                            which run the repo's [tasks] new / exists with every value quoted
+    factory spec check                     every capability spec ([specs] dir) is well formed and each cited test exists
     factory run CAPABILITY [--dry-run]     run a capability once, here and now, in a fresh worktree (e.g. `upgrade`);
                                            scheduled and event-driven runs belong to the engine
     factory engine ...                     the factory engine: install, upgrade, status, run-now … (`factory engine --help`)
@@ -24,7 +25,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import config as config_mod
-from . import deprecations, engine, runner, tasks, upgrade
+from . import deprecations, engine, runner, specs, tasks, upgrade
 
 
 def _root(path: Path | None) -> Path:
@@ -79,12 +80,13 @@ def main(argv: list[str] | None = None) -> int:
     dp.add_argument("file", nargs="?", type=Path)
     dp.add_argument("--json", action="store_true")
     dp.add_argument("--base", type=Path, help="directory the tool ran in (default: repo root)")
+    spc = sub.add_parser("spec").add_subparsers(dest="action", required=True).add_parser("check")
     sub.add_parser("task", help="the task system: factory task --help")  # parsed by task() above
     rn = sub.add_parser("run")
     rn.add_argument("capability")
     rn.add_argument("--dry-run", action="store_true")
     rn.add_argument("--keep", action="store_true", help="keep the worktree even if nothing was pushed")
-    for p in (sc, dp, rn):
+    for p in (sc, dp, rn, spc):
         p.add_argument("--repo", type=Path, default=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
@@ -110,6 +112,16 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{d.kind:<10} {where}{d.category}: {d.message}")
             print(f"{sum(d.kind == 'ours' for d in found)} in our code · {len(found)} total", file=sys.stderr)
         return 1 if any(d.kind == "ours" for d in found) else 0
+    if args.cmd == "spec":
+        report = specs.check(cfg.root, cfg.specs.dir, cfg.specs.resolver, cfg.tasks_id_pattern)
+        for failure in report.failures:
+            print(failure)
+        counts = f"{report.specs} specs, {report.requirements} requirements, {report.proofs} proofs"
+        if report.failures:
+            print(f"spec check FAILED: {len(report.failures)} problems ({counts})", file=sys.stderr)
+            return 1
+        print(f"spec check passed: {counts}")
+        return 0
     if args.cmd == "run":
         return runner.run(cfg, args.capability, dry_run=args.dry_run, keep=args.keep)
     return 2
