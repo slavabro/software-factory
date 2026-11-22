@@ -46,6 +46,7 @@ The base everything later stands on, built the way it is meant to end up. Design
 | ID | Task | Why |
 |----|------|-----|
 | F-11 | **Engineering pipeline** — FamilyOffice's `/design-task` → `/review-design` → `/compact-design` → `/implement-feature` → `/sync-docs` → `/complete-feature` → `/land`, plus `/review-code`, `/bug-report`, `/debug-fix`, `/challenge`, `git-workflow`; project specifics (test tiers, gate rules, domain reviewers) move into `.factory.toml` | Reuse in every repo; one place to improve |
+| F-34 | **Capability specs** — one living file per capability (`specs/<capability>.md`): each requirement is one SHALL sentence in the principal's words plus the tests that prove it; a design names the requirements it ADDs, MODIFIEs or REMOVEs and the implementing PR edits the spec in place (no delta files, no archive merge); `factory spec check` fails CI on a cited test that no longer exists. Borrowed from OpenSpec without its delta merge — see [F-34 spec](#f-34-spec--capability-specs) | An agent or the principal reads what the product promises today in one short file instead of digging through finished designs; concurrent changes conflict in git instead of one being lost |
 | F-30 | **Practice guides** — split each FamilyOffice reviewer into a generic factory skill and the project's notes: data access (schema, migrations, sessions, idempotent writes), Temporal workflows, LLM integration, frontend, testing patterns, data presentation (Tufte) | Good practice is the same in every product; only the domain facts differ |
 | F-31 | **Model and cost policy** — model per stage in `.factory.toml` (Opus for shaping and design, Sonnet for building and review, Haiku for triage and log reading); tokens and cost logged for every run and stage; a weekly cost report, including what each skill costs every session (absorbs the old F-22) | Choose models by evidence; keep spend visible |
 
@@ -130,3 +131,55 @@ new capabilities as ideas — so the principal only sees results and decisions.
 
 **Done when:** a run on FamilyOffice produces a digest, at least one grouped upgrade PR that passes CI, tasks for the
 risky items and inbox ideas for the opportunities — with every claim linked to a release note.
+
+## F-34 spec — Capability specs
+
+**Goal.** Every product the factory makes has one current answer to "what does this capability promise today",
+short enough to read on demand, which cannot drift from the code without a check failing. Research and the full
+comparison (OpenSpec, Spec Kit, Kiro, ADRs, BDD): FamilyOffice `docs/research/openspec-comparison.md`.
+
+**Why not OpenSpec as-is.** Its change half (proposal, design, tasks, review, archive) is what the engineering
+pipeline (F-11) and the task system (F-03) already do, more thoroughly. Its living specs are kept true by delta files
+that `openspec archive` copies in, matched by requirement name with no base version. Two open changes to one
+requirement can then silently lose an edit ([#1387](https://github.com/Fission-AI/OpenSpec/issues/1387)), and the
+maintainers are asking whether archive should merge at all
+([#2033](https://github.com/Fission-AI/OpenSpec/issues/2033)). `openspec validate` checks format only, never
+whether code still behaves as written ([#880](https://github.com/Fission-AI/OpenSpec/issues/880)).
+
+**The format** (`specs/` at the repo root; the folder is a `[specs]` setting in `.factory.toml`):
+- One file per capability, named by function; front matter `capability:` (equals the file name) and `owners:`
+  (directories whose CLAUDE.md links the spec).
+- A requirement is a `## <slug>` heading, one or two sentences with SHALL / MUST, and a `Proven by:` list of test
+  IDs. The tests are the scenarios: there is no WHEN/THEN prose restating them.
+- No history: no task IDs, dates or rationale. Why lives in the finished task specs and in git.
+
+**`factory spec check`** (standard library; run by the repo's `make ci`, so CI runs it):
+1. Front matter, unique slugs, SHALL/MUST in every requirement, at least one proof each.
+2. Every proof resolves without running anything. Resolvers are per test framework, starting with `pytest`
+   (`path::function[param]`, by AST). A renamed, moved or deleted test fails with the requirement it orphaned.
+3. Nothing historical: the repo's task-ID pattern (from `[tasks]`) and dates are refused.
+4. The specs folder is not in any workflow's `paths-ignore`. Otherwise a spec-only PR skips CI and the merge gate
+   treats spec commits on main as docs (in FamilyOffice, `docs/**` is docs-only, hence the root folder).
+
+What a check cannot see — a cited test whose assertion changed while its sentence did not — becomes one line in the
+review gate's architect lens.
+
+**The pipeline** (these pieces belong to F-11's skills; if F-34 lands first they go into the repo's own skills
+that F-11 will move):
+- Design: reads `specs/<capability>.md` for each capability touched. It writes a `## Capability changes` section
+  with ADDED / MODIFIED (full new sentence and its proving tests) and REMOVED (why), replacing the behavioural part
+  of Acceptance Criteria.
+- REVIEW: a "Promises that change" section, so the principal approves promises, not code.
+- Review-design: every ADDED or MODIFIED requirement has a proving test in the test plan. Compact-design keeps the
+  section.
+- Implement: edits `specs/` in the same PR as the code and tests. There is no archive step: the task system's
+  `complete` already moves the change folder, and git's three-way merge is the conflict detector.
+- Sync-docs: behaviour sentences that a spec now owns leave the directory CLAUDE.md files.
+
+**Rollout on a product.** Seed with the few capabilities that have the most design history (FamilyOffice:
+evaluations, statement import, rebalancing), then grow on touch: a task that changes a capability with no spec
+creates one. No backfill project.
+
+**Done when:** FamilyOffice has `specs/` with three seed specs and `make ci` runs `factory spec check`; renaming a
+cited test fails CI; and a design made by the pipeline carries a Capability changes section that the
+implementing PR applied to `specs/`.
