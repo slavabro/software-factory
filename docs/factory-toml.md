@@ -17,6 +17,8 @@ with = "skill:land"           # "skill:<name>" invokes that repo skill; anything
 [tasks]
 system = "factory"            # the factory's task system (docs/tasks.md); "commands" = the two commands below
 legacy_duplicate_ids = []     # IDs that shipped twice before IDs were checked
+id_pattern = '...'            # regex for a task reference in prose; default per system: "factory" = its IDs
+                              # (1.60, 0.41b), "commands" = an issue number (#12). `factory spec check` refuses it
 # system = "commands": placeholders are shell-quoted by `factory task new|exists`
 new = "gh issue create --title {title} --body-file {body_file}"   # {title} {body_file} {priority}
 exists = "gh issue list --state open --search {query} --json number --jq 'length > 0' | grep -q true"  # exit 0 = exists
@@ -48,12 +50,53 @@ install = []                  # install the changed manifests in the worktree (p
 deprecation_check = []        # commands whose output shows deprecation warnings (tests with warnings on, a build)
 max_prs = 3                   # per run; the upgrade capability is also the engine's team `upgrade`
 
+[specs]                       # capability specs: what each capability promises today, proven by tests
+dir = "specs"                 # repo-relative folder of <capability>.md files; keep it out of every workflow's paths-ignore
+resolver = "pytest"           # how a cited test is found without running it: pytest node IDs, by AST
+
 [teams.qa]                    # a standing team the engine runs (docs/designs/engine.md); one table per team
 prompt = "/factory:qa"        # required: what the agent session is asked to do
 schedule = "0 2 * * *"        # cron in the engine's time zone; "off" (default) = events and `factory engine run-now` only
 budget_minutes = 90           # one run's agent time, across retries
 wake_on = ["ci_red"]          # events that wake it: ci_red, deploy_failed, incident, merged
 ```
+
+## Capability specs (`[specs]`)
+
+One file per capability, `<dir>/<capability>.md` (`CLAUDE.md` and `README.md` there are the folder's own notes):
+
+```markdown
+---
+capability: evaluations                      # equals the file name
+owners: [common/evaluations, common/policies]  # directories whose CLAUDE.md links this file
+---
+# Asset evaluations
+
+One or two lines on what the capability is.
+
+## judgement-is-never-pruned
+Disabling a criterion SHALL remove only the ratings a rule gave; a rating the principal gave SHALL be kept.
+
+Proven by:
+- tests/database/test_rule_pass.py::test_disabled_criterion_prunes_rule_ratings_only
+- tests/database/test_rule_pass.py::TestPrune::test_keeps_judgement[analyst]
+```
+
+`factory spec check` (run it from the repo's CI, e.g. `make ci`) fails, naming the file, the requirement slug and
+the fix, when:
+
+- the front matter is missing or has other keys, `capability` differs from the file name, or an owner directory
+  is missing or its CLAUDE.md has no link to the spec;
+- a `## <slug>` heading is not a lowercase slug or repeats one, a requirement has no SHALL or MUST, or it does
+  not end with a `Proven by:` list of at least one test;
+- a cited test does not resolve. Nothing is run or imported: the `pytest` resolver parses the file and finds
+  `path::function`, `path::Class::method` (nested classes and base classes in the same file too); a `[param]`
+  suffix is accepted as written;
+- the prose holds history: a task reference (`[tasks] id_pattern`) or a date. Why and when live in the finished
+  task specs and in git;
+- a `paths-ignore` glob in `.github/workflows/*.yml` (or `.yaml`) matches a spec (GitHub Actions globs: `**` crosses `/`, `*`
+  does not), so a PR that only edits a spec would skip that workflow. `docs/**` is the usual trap; hence `specs/`
+  at the root.
 
 ## Safety model for unattended runs
 
@@ -75,6 +118,7 @@ wake_on = ["ci_red"]          # events that wake it: ci_red, deploy_failed, inci
 | `factory upgrade scan [--json]` | what can move, how far (patch / minor / major), risky or not, release-notes links |
 | `<check> 2>&1 \| factory upgrade deprecations` | deprecation warnings raised from the repo's own code; exit 1 while any |
 | `factory task …` | the task system ([tasks.md](tasks.md)): `init`, `new`, `start`, `subtask`, `complete`, `close`, `set`, `show`, `check`, `check-pr`, `render`, `exists`; with `system = "commands"` only `new` / `exists`, running the repo's commands with every value shell-quoted |
+| `factory spec check` | every capability spec in `[specs] dir` is well formed, history-free and proven by tests that exist; exit 1 with each problem and its fix |
 | `factory run upgrade [--dry-run] [--keep]` | the whole upgrade unattended: fresh worktree off `origin/<default_branch>`, `[worktree] setup`, then the agent runs `/factory:upgrade`; one run per repo at a time; log under `~/.cache/software-factory/logs/<repo>/` |
 | `factory engine install --repo PATH` | the engine runs this repo's teams: each team's `schedule` becomes a Temporal Schedule (in the engine's time zone, `engine.toml` `time_zone`, default the machine's), paused until its first run by hand |
 | `factory engine run-now --repo PATH --team T` · `status` · `pause` · `resume` · `signal` | run a team now, see schedules and recent runs, pause or resume a team, wake teams on an event ([engine/README.md](../engine/README.md)) |

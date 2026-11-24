@@ -58,6 +58,19 @@ class Upgrade:
     max_prs: int = 3  # per run
 
 
+# A task reference in prose, per task system: the factory's IDs are {priority}.{n} with an optional sub-task letter
+# (docs/tasks.md); with system = "commands" the default is a GitHub issue number. `[tasks] id_pattern` overrides.
+TASK_ID_PATTERNS = {"factory": r"(?<![\w.])\d+\.\d+[a-z]?(?!\w)(?!\.\d)", "commands": r"(?<![\w&])#\d+\b"}
+
+
+@dataclass
+class Specs:
+    """Capability specs (docs/factory-toml.md [specs]): what each capability promises today, proven by tests."""
+
+    dir: str = "specs"  # repo-relative folder of `<capability>.md` files
+    resolver: str = "pytest"  # how a `Proven by:` entry is found without running it (sfactory/specs.py RESOLVERS)
+
+
 # Why a team is woken besides its schedule (engine events, docs/designs/engine.md).
 WAKE_REASONS = ("ci_red", "deploy_failed", "incident", "merged")
 
@@ -82,6 +95,7 @@ class Config:
     # Tasks: "factory" = the factory's task system (docs/tasks/, `factory task`); "commands" = new/exists below.
     tasks_system: str = "factory"
     tasks_legacy_duplicate_ids: list[str] = field(default_factory=list)  # IDs that shipped twice before IDs were checked
+    tasks_id_pattern: str = TASK_ID_PATTERNS["factory"]  # a task reference in prose (regex); default per system
     # With system = "commands". Placeholders are shell-quoted by `factory task …`: {title} {body_file} {priority} {query}.
     new_task: str = "gh issue create --title {title} --body-file {body_file}"
     task_exists: str = "gh issue list --state open --search {query} --json number --jq 'length > 0' | grep -q true"
@@ -97,6 +111,7 @@ class Config:
     agent_timeout_minutes: int = 180
     report_with: str = ""  # shell command run with {file} = the run's digest; empty = path printed to the log
     upgrade: Upgrade = field(default_factory=Upgrade)
+    specs: Specs = field(default_factory=Specs)
     extra_teams: dict[str, Team] = field(default_factory=dict)  # [teams.<name>]
 
     def teams(self) -> dict[str, Team]:
@@ -117,11 +132,12 @@ SECTIONS = {
     "repo": {"name", "default_branch"},
     "verify": {"commands"},
     "land": {"with"},
-    "tasks": {"system", "new", "exists", "legacy_duplicate_ids"},
+    "tasks": {"system", "new", "exists", "legacy_duplicate_ids", "id_pattern"},
     "worktree": {"setup", "path"},
     "agent": {"command", "allowed_tools", "extra_allowed_tools", "disallowed_tools", "extra_disallowed_tools", "timeout_minutes"},
     "report": {"with"},
     "upgrade": {f.name for f in fields(Upgrade)},
+    "specs": {f.name for f in fields(Specs)},
     "teams": set(),  # one table per team, keys TEAM_KEYS
 }
 TEAM_KEYS = {f.name for f in fields(Team)}
@@ -140,11 +156,25 @@ def _check(raw: dict, path: Path) -> None:
         for key in body:
             if key not in SECTIONS[section]:
                 raise ConfigError(f"{path}: unknown key {section}.{key} (known: {', '.join(sorted(SECTIONS[section]))})")
-    defaults = Upgrade()
-    for key, value in raw.get("upgrade", {}).items():
-        want = type(getattr(defaults, key))
-        if not isinstance(value, want) or (want is int and isinstance(value, bool)):
-            raise ConfigError(f"{path}: upgrade.{key} must be {want.__name__}, got {type(value).__name__}")
+    for section, defaults in (("upgrade", Upgrade()), ("specs", Specs())):
+        for key, value in raw.get(section, {}).items():
+            want = type(getattr(defaults, key))
+            if not isinstance(value, want) or (want is int and isinstance(value, bool)):
+                raise ConfigError(f"{path}: {section}.{key} must be {want.__name__}, got {type(value).__name__}")
+    specs = raw.get("specs", {})
+    from .specs import RESOLVERS  # the resolvers live with the check that runs them
+
+    if specs.get("resolver", Specs.resolver) not in RESOLVERS:
+        raise ConfigError(f"{path}: specs.resolver must be one of {', '.join(sorted(RESOLVERS))}")
+    folder = Path(specs.get("dir", Specs.dir))
+    if not specs.get("dir", Specs.dir).strip() or folder.is_absolute() or ".." in folder.parts or folder == Path("."):
+        raise ConfigError(f"{path}: specs.dir must be a folder inside the repo, e.g. \"specs\"")
+    pattern = raw.get("tasks", {}).get("id_pattern")
+    if pattern is not None:
+        try:
+            re.compile(str(pattern))
+        except re.error as e:
+            raise ConfigError(f"{path}: tasks.id_pattern is not a regular expression ({e})") from None
 
 
 def _check_teams(teams: dict, path: Path) -> None:
@@ -205,6 +235,7 @@ def parse(root: Path, text: str | None, path: Path) -> Config:
     if cfg.tasks_system not in ("factory", "commands"):
         raise ConfigError(f'{path}: tasks.system must be "factory" or "commands", got "{cfg.tasks_system}"')
     cfg.tasks_legacy_duplicate_ids = [str(i) for i in tasks.get("legacy_duplicate_ids", [])]
+    cfg.tasks_id_pattern = str(tasks.get("id_pattern", TASK_ID_PATTERNS[cfg.tasks_system]))
     cfg.new_task = str(tasks.get("new", cfg.new_task))
     cfg.task_exists = str(tasks.get("exists", cfg.task_exists))
     wt = raw.get("worktree", {})
@@ -220,5 +251,7 @@ def parse(root: Path, text: str | None, path: Path) -> Config:
     cfg.report_with = str(raw.get("report", {}).get("with", cfg.report_with))
     for key, value in raw.get("upgrade", {}).items():
         setattr(cfg.upgrade, key, value)
+    for key, value in raw.get("specs", {}).items():
+        setattr(cfg.specs, key, value)
     cfg.extra_teams = {name: Team(**body) for name, body in raw.get("teams", {}).items()}
     return cfg
