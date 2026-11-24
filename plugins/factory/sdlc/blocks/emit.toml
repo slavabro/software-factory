@@ -1,0 +1,4 @@
+kind = "event"
+name = "Emit event"
+does = "Publishes a named event; every process that starts on it runs, and runs waiting for it wake."
+runs_in = ["session", "engine"]

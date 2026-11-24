@@ -1,0 +1,5 @@
+kind = "check"
+name = "Skillcheck"
+does = "Lints the repo's skills, commands, subagents and CLAUDE.md files and checks their claims."
+run = ["skillcheck . --strict"]
+runs_in = ["session", "engine", "ci"]

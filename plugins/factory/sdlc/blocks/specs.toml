@@ -1,0 +1,5 @@
+kind = "check"
+name = "Spec check"
+does = "Every capability spec is well formed and each test it cites exists."
+run = ["factory spec check"]
+runs_in = ["session", "engine", "ci"]

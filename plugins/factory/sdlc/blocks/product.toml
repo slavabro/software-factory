@@ -1,0 +1,12 @@
+kind = "agent"
+name = "Product agent"
+does = "Turns an idea into a problem, users and a success measure, then splits it into small tasks with dependencies."
+status = "planned"
+task = "F-10"
+outputs = { task = 8, comment = 1 }
+emits = ["task.created"]
+runs_in = ["engine", "session"]
+tools = ["github-read"]
+[defaults]
+model = "opus"
+autonomy = "read"

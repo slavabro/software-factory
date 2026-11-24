@@ -13,7 +13,15 @@ Decided by the principal:
 - **D-7** (2026-11-22): a checkpoint set to "until trusted" asks once before it stops asking.
 - **D-8** (2026-11-22): a miss sends it back to asking at once.
 - **D-10** (2026-11-22): standing teams become processes with schedule or event triggers.
+- **D-11** (2026-11-24): floors can't be removed on the Desk.
+- **D-12** (2026-11-24): a new reusable agent is a skill landed by PR.
 - **D-13** (2026-11-24): the Desk is configuration, never day-to-day work.
+- **D-14** (2026-11-24): processes and gates live in the repo under `.factory/`, written by the Desk's PR.
+
+**Generic and configurable** (the principal, 2026-11-24). Every vocabulary is data in the factory's catalog
+(models, autonomy ladder, ask modes, executors, outputs, tools, resources, events, default gates, floors), every
+block is a file, and a project's folder, skills folders, extra models and extra events are `.factory.toml`
+`[sdlc]` settings. Nothing names a project. Reference: [factory-sdlc.md](../factory-sdlc.md).
 
 ## Borrowed from similar systems
 
@@ -59,8 +67,9 @@ A **card** shows:
 - its record (runs, outcomes, minutes);
 - where it is used.
 
-Factory blocks are declared next to their code (`plugins/factory/blocks/<name>.toml`), and a skillcheck rule keeps
-the two in step. A project's own blocks are its skills and commands, read from the repo and never copied. A new
+Factory blocks are files in `plugins/factory/sdlc/blocks/`, and the factory's tests keep them in step with the code
+(every available agent's skill exists, every `run_from` is a setting). A project's own blocks are files in its
+`.factory/blocks/` that point at its skills and commands, which stay where they are and are never copied. A new
 reusable agent is a skill landed by PR with its evals (D-12). On the Desk, any agent step can be given its own
 instructions and model.
 
@@ -103,7 +112,8 @@ Each project has two gates, and every process passes them:
   GitHub, and the deploy log.
 - **Floors** always ask, and the Desk can't remove them (D-11):
   - a PR changing `.factory.toml`, `.factory/` or CI;
-  - a PR touching the repo's ask paths (software-factory: hooks, guards and the gate, D-3);
+  - a PR touching the repo's ask paths (software-factory: hooks, guards and the gate, D-3), once F-02 adds
+    `[land] ask_paths`;
   - a project's first production deploy.
 - **Autonomy cap.** A project-wide maximum autonomy that no agent step can exceed.
 
@@ -167,8 +177,8 @@ The spec format is OpenSpec-compatible, built into the task system.
 
 ## Build order
 
-1. **Foundations:** block declarations and cards; the process file format and its validator; factory step types on
-   the engine; `.factory/gates.json`.
+1. **Foundations:** the catalog, block files and cards, templates, the process and gates formats with their
+   validator, `[sdlc]`, and `factory sdlc` (built). Then the factory step types on the engine.
 2. **Teams become processes:** the upgrade team becomes the Upgrade process, and the old `.factory.toml` keys go.
 3. **Events and CI:** the engine's GitHub reader, event triggers, PR checks and `factory / gate`; the tower reads
    the gates (F-02).

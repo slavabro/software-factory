@@ -1,0 +1,12 @@
+kind = "agent"
+name = "Review lens"
+does = "Reviews a diff or a design through one lens with fresh context: it never sees the author's reasoning."
+status = "planned"
+task = "F-11"
+inputs = ["diff or design", "the repo's rules"]
+outputs = { comment = 1 }
+runs_in = ["engine", "session"]
+tools = ["github-read"]
+[defaults]
+fresh_context = true
+budget_minutes = 20

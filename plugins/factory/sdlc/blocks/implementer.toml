@@ -1,0 +1,12 @@
+kind = "agent"
+name = "Implementer"
+does = "Builds a designed task: code and tests on a branch, until verify passes."
+status = "planned"
+task = "F-11"
+inputs = ["task", "design"]
+outputs = { files = 1 }
+runs_in = ["engine", "session"]
+tools = ["repo-commands"]
+[defaults]
+autonomy = "edit"
+budget_minutes = 120

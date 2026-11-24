@@ -1,0 +1,11 @@
+kind = "agent"
+name = "Lander"
+does = "Opens the PR, answers CI failures and review comments, and hands the PR to the merge gate."
+status = "planned"
+task = "F-11"
+outputs = { pr = 1, comment = 5 }
+emits = ["pr.opened"]
+runs_in = ["engine", "session"]
+tools = ["github-read", "github-write", "repo-commands"]
+[defaults]
+autonomy = "pr"

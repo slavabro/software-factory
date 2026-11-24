@@ -1,0 +1,11 @@
+kind = "agent"
+name = "CI diagnoser"
+does = "Reads a failing CI run and finds the cause: a flaky test, a real break, or infrastructure."
+status = "planned"
+task = "F-23"
+outputs = { comment = 1, task = 1 }
+runs_in = ["engine"]
+tools = ["github-read"]
+[defaults]
+model = "haiku"
+budget_minutes = 15

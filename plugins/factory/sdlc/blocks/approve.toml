@@ -1,0 +1,5 @@
+kind = "human"
+name = "Human step"
+does = "A person decides. In a session it is a question there; in the engine the run saves its place and ends, and the answer, given in the person's own tool, continues it. Each outcome is its own exit."
+outputs = {}
+runs_in = ["session", "engine"]

@@ -1,0 +1,10 @@
+kind = "agent"
+name = "QA agent"
+does = "Runs the app end to end and checks each acceptance criterion; files what fails."
+status = "planned"
+task = "F-18"
+outputs = { task = 10, report = 1 }
+runs_in = ["engine", "session"]
+tools = ["browser", "repo-commands"]
+[defaults]
+budget_minutes = 45
