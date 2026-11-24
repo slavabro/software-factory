@@ -2,9 +2,11 @@
 
 Built and read like a product's own LLM-usage page: a framed strip of four figures with the provenance line under
 it, the budgets as meters (a thin track, a flat fill, a tick at the warn and danger lines, the unclamped figure and
-the state as a word and a shape), daily spend as bars from zero with the budget pace as a dashed rule, then ranked
-tables that fold the tail into "Other" and state their finding in the title. Red-green safe: no state is shown by
-colour alone (CLAUDE.md rule 6). Only metrics and names reach the page, never transcript text.
+the state as a word and a shape), daily spend as bars from zero with the budget pace as a dashed rule, then the
+department × project grid, what a landed task costs each department, ranked tables that fold the tail into "Other"
+and state their finding in the title, the costliest sessions, the product's own runtime spend ("Run") and the
+cache. Red-green safe: no state is shown by colour alone (CLAUDE.md rule 6). Only metrics and names reach the
+page, never transcript text.
 """
 
 from __future__ import annotations
@@ -15,13 +17,14 @@ import math
 from collections import Counter
 from dataclasses import dataclass, field
 
-from . import usage
 from .cost import (
-    APPROACHING, NEAR, OVER, WITHIN, Entry, Meter, Period, Settings, Totals, agent_words, days_in_month, fmt_tokens,
-    fmt_usd, group, local_midnight, month_start, total,
+    APPROACHING, LANDED, NEAR, OVER, WITHIN, LandedRow, Meter, Period, Settings, Totals, agent_words, cost_per_landed_task,
+    days_in_month, fmt_tokens, fmt_usd, group, local_midnight, month_start, total,
 )
+from .usage import UsageRecord
 
 ROW_LIMIT = 6  # more rows fold into one "Other" row, so the breakdown tables stay short
+GRID_PROJECTS = 5  # project columns in the department × project grid before "Other"
 TOP_SESSIONS = 12
 
 
@@ -41,10 +44,9 @@ def fold(rows: list[tuple[str, Totals]], limit: int = ROW_LIMIT) -> list[dict]:
         tail = out[limit - 1:]
         merged = Totals()
         for r in tail:
-            t = r["t"]
-            merged.cost += t.cost
-            merged.turns += t.turns
-            merged.tokens += t.tokens
+            merged.cost += r["t"].cost
+            merged.calls += r["t"].calls
+            merged.tokens += r["t"].tokens
         out = out[: limit - 1] + [{"name": "Other", "t": merged, "other": len(tail)}]
     for r in out:
         r["pct"] = r["t"].cost / all_cost * 100 if all_cost else 0
@@ -75,72 +77,109 @@ class Model:
     budget_pace: float | None  # USD/day an all-spend monthly budget allows
     daily: list[tuple[dt.date, float, int, int]]  # day, cost, turns, tokens
     meters: list[Meter]
+    dept_names: dict[str, str]
+    direct: str
+    grid: dict  # {"projects": [...], "rows": [(dept, {project: cost}, total)], "totals": {project: cost}}
+    landed: list[LandedRow] | None  # None: not asked
+    landed_tasks: int  # distinct tasks that landed and had spend in the period
     breakdowns: list[tuple[str, str, list[dict]]]  # noun, fallback title, rows
     sessions: list[dict]
-    models: list[dict]
+    runtime: dict | None  # the product's own spend: {"total", "departments", "projects", "configured"}
     cache_saved: float
     cache_premium: float
     unpriced: list[str]
     plan_monthly: float | None
     notes: list[str] = field(default_factory=list)
 
+    def dept(self, dept_id: str) -> str:
+        return self.dept_names.get(dept_id, dept_id)
+
     @classmethod
-    def build(cls, rows: list[Entry], found: list[Meter], settings: Settings, p: Period, now: dt.datetime) -> "Model":
-        cur = [e for e in rows if p.since <= e.rec.ts < p.until]
-        prior = [e for e in rows if p.prior_since <= e.rec.ts < p.since]
-        month = [e for e in rows if e.rec.ts >= month_start(now)]
-        today = [e for e in rows if e.rec.ts >= local_midnight(now)]
-        month_cost = sum(e.rec.cost_usd for e in month)
+    def build(cls, rows: list[UsageRecord], runtime: list[UsageRecord], found: list[Meter], settings: Settings,
+              p: Period, now: dt.datetime, status: dict[tuple[str, str], str] | None = None,
+              landed: bool = True) -> "Model":
+        cur = [r for r in rows if p.since <= r.ts < p.until]
+        prior = [r for r in rows if p.prior_since <= r.ts < p.since]
+        month = [r for r in rows if r.ts >= month_start(now)]
+        today = [r for r in rows if r.ts >= local_midnight(now)]
+        month_cost = sum(r.cost_usd for r in month)
         days = days_in_month(now)
-        pace_budget = next((m for m in found if m.scope_key is None and m.owner_repo is None and m.unit == "usd"
+        pace_budget = next((m for m in found if not m.scope and not m.runtime and m.unit == "usd"
                             and m.window == "this month"), None)
         daily: dict[dt.date, list] = {}
         day = p.since.astimezone(now.tzinfo).date()
         while day <= now.date():
             daily[day] = [0.0, 0, 0]
             day += dt.timedelta(days=1)
-        for e in cur:
-            d = daily.setdefault(e.rec.ts.astimezone(now.tzinfo).date(), [0.0, 0, 0])
-            d[0] += e.rec.cost_usd
+        for r in cur:
+            d = daily.setdefault(r.ts.astimezone(now.tzinfo).date(), [0.0, 0, 0])
+            d[0] += r.cost_usd
             d[1] += 1
-            d[2] += e.rec.tokens
+            d[2] += r.tokens
         saved = premium = 0.0
-        for e in cur:
-            price = settings.prices(usage.Where(e.rec.repo, e.rec.capability, e.rec.repo_root)).models.get(
-                usage.canonical_model(e.rec.model))
+        for r in cur:
+            price = settings.prices(r.project).price(r.model)
             if price:
-                saved += e.rec.cache_read * (price.input - price.cache_read) / 1e6
-                premium += ((e.rec.cache_write - e.rec.cache_write_1h) * (price.cache_write_5m - price.input)
-                            + e.rec.cache_write_1h * (price.cache_write_1h - price.input)) / 1e6
+                saved += r.cache_read_tokens * (price.input - price.cache_read) / 1e6
+                premium += ((r.cache_write_tokens - r.cache_write_1h) * (price.cache_write_5m - price.input)
+                            + r.cache_write_1h * (price.cache_write_1h - price.input)) / 1e6
+        org = settings.org
+        names = {d.id: d.name or d.id for d in org.departments}
+        # Department × project: departments in the org's order, projects by spend.
+        by_project = [name for name, _ in group(cur, "project")]
+        shown = by_project if len(by_project) <= GRID_PROJECTS + 1 else by_project[:GRID_PROJECTS]
+        other = [x for x in by_project if x not in shown]
+        cols = shown + (["Other"] if other else [])
+        cells: dict[str, dict[str, float]] = {}
+        for r in cur:
+            col = r.project if r.project in shown else "Other"
+            cells.setdefault(r.department, {}).setdefault(col, 0.0)
+            cells[r.department][col] += r.cost_usd
+        order = [d.id for d in org.departments] + sorted(set(cells) - {d.id for d in org.departments})
+        grid_rows = [(dept, cells[dept], sum(cells[dept].values())) for dept in order if dept in cells]
+        col_totals = {c: sum(row[1].get(c, 0.0) for row in grid_rows) for c in cols}
         sessions = []
         for sid, t in group(cur, "session")[:TOP_SESSIONS]:
-            mine = [e for e in cur if e.rec.session_id == sid]
-            main = [e for e in mine if not e.rec.is_subagent] or mine
-            sub_cost = sum(e.rec.cost_usd for e in mine if e.rec.is_subagent)
+            mine = [r for r in cur if r.session_id == sid]
+            main = [r for r in mine if not r.is_subagent] or mine
+            sub_cost = sum(r.cost_usd for r in mine if r.is_subagent)
+            top = lambda f, pool=main: Counter(f(r) for r in pool).most_common(1)[0][0]  # noqa: E731
             sessions.append({
-                "id": sid, "t": t, "repo": Counter(e.rec.repo for e in mine).most_common(1)[0][0],
-                "branch": Counter(e.rec.branch for e in main).most_common(1)[0][0],
-                "agent": Counter(e.agent for e in main).most_common(1)[0][0],
-                "task": Counter(e.task for e in main).most_common(1)[0][0],
+                "id": sid, "t": t, "project": top(lambda r: r.project, mine), "branch": top(lambda r: r.branch),
+                "agent": top(lambda r: r.agent), "task": top(lambda r: r.task),
+                "department": max({r.department for r in mine},
+                                  key=lambda d: sum(r.cost_usd for r in mine if r.department == d)),
                 "sub_pct": sub_cost / t.cost * 100 if t.cost else 0,
             })
         breakdowns = [
-            ("Department", "Spend by department", fold(group(cur, "department"))),
-            ("Agent", "Spend by agent", fold(group(cur, lambda e: agent_words(e.agent)))),
+            ("Agent", "Spend by agent", fold(group(cur, lambda r: agent_words(r.agent)))),
+            ("Process", "Spend by process", fold(group(cur, lambda r: r.process or "—"))),
             ("Task", "Spend by task", fold(group(cur, "task"))),
-            ("Repo", "Spend by repo", fold(group(cur, "repo"))),
+            ("Model", "Spend by model", fold(group(cur, "model"))),
         ]
+        rt = [r for r in runtime if p.since <= r.ts < p.until]
+        configured = sorted(pr for pr, c in settings.projects.items() if c.runtime_usage)
+        runtime_view = None
+        if configured or rt:
+            runtime_view = {
+                "total": total(rt), "configured": configured,
+                "departments": fold(group(rt, lambda r: r.department or "—"), limit=8),
+                "projects": fold(group(rt, "project"), limit=8),
+            }
         return cls(
-            period=p, now=now, spend=total(cur), prior_cost=sum(e.rec.cost_usd for e in prior) if prior else None,
-            prior_first=min((e.rec.ts for e in prior), default=None),
-            month_cost=month_cost, today_cost=sum(e.rec.cost_usd for e in today),
+            period=p, now=now, spend=total(cur), prior_cost=sum(r.cost_usd for r in prior) if prior else None,
+            prior_first=min((r.ts for r in prior), default=None), month_cost=month_cost,
+            today_cost=sum(r.cost_usd for r in today),
             projected=month_cost / now.day * days if month else None,
             budget_pace=pace_budget.limit / days if pace_budget else None,
-            daily=[(d, v[0], v[1], v[2]) for d, v in sorted(daily.items())], meters=found,
-            breakdowns=breakdowns, sessions=sessions, models=fold(group(cur, "model"), limit=8),
-            cache_saved=saved, cache_premium=premium,
-            unpriced=sorted({e.rec.model for e in cur if not e.rec.priced}),
-            plan_monthly=settings.plan_monthly_usd or None, notes=list(settings.notes),
+            daily=[(d, v[0], v[1], v[2]) for d, v in sorted(daily.items())], meters=found, dept_names=names,
+            direct=org.direct, grid={"projects": cols, "rows": grid_rows, "totals": col_totals},
+            landed=cost_per_landed_task(cur, status or {}) if landed else None,
+            landed_tasks=len({(r.project, r.task) for r in cur
+                              if (status or {}).get((r.project, r.task)) == LANDED}),
+            breakdowns=breakdowns, sessions=sessions, runtime=runtime_view, cache_saved=saved, cache_premium=premium,
+            unpriced=sorted({r.model for r in cur if not r.priced}), plan_monthly=settings.plan_monthly_usd or None,
+            notes=list(settings.notes),
         )
 
 
@@ -227,8 +266,7 @@ def daily_chart(m: Model) -> str:
 
 
 def spend_trend_title(m: Model) -> str:
-    pts = [(d, c) for d, c, _, _ in m.daily if c]
-    if not pts:
+    if not any(c for _, c, _, _ in m.daily):
         return "Daily spend"
     tot = sum(c for _, c, _, _ in m.daily)
     peak = max(m.daily, key=lambda d: d[1])
@@ -252,13 +290,15 @@ def stats(m: Model) -> str:
             partial = f" (records start {m.prior_first.astimezone(m.now.tzinfo).strftime('%-d %b')})"
         vs = f"{arrow} {fmt_usd(abs(change))}{pct} vs {esc(m.period.prior)}{partial} · "
     pace = ""
-    month_budget = next((x for x in m.meters if x.scope_key is None and x.owner_repo is None and x.unit == "usd"
+    month_budget = next((x for x in m.meters if not x.scope and not x.runtime and x.unit == "usd"
                          and x.window == "this month"), None)
     if m.projected is not None and month_budget:
         pace = f" · {m.projected / month_budget.limit * 100:.0f}% of the {fmt_usd(month_budget.limit, 0)} budget"
-    per_turn = t.cost / t.turns if t.turns else None
+    per_turn = t.cost / t.calls if t.calls else None
     hit = t.cache_hit
     spark = sparkline([c for _, c, _, _ in m.daily]) if len(m.daily) >= 2 else ""
+    direct = sum(row[2] for row in m.grid["rows"] if row[0] == m.direct)
+    direct_text = f" · {direct / t.cost * 100:.0f}% {esc(m.dept(m.direct))}" if t.cost else ""
     return f"""
 <div class="strip">
   <div class="stat"><span class="label">Projected this month</span>
@@ -266,13 +306,13 @@ def stats(m: Model) -> str:
     <p class="caption">{fmt_usd(m.month_cost)} month to date{pace}</p></div>
   <div class="stat"><span class="label">Spend, {esc(m.period.last)}</span>
     <div class="row"><span class="value">{fmt_usd(t.cost)}</span>{spark}</div>
-    <p class="caption">{vs}{t.turns:,} turns · {fmt_tokens(t.tokens)} tokens</p></div>
+    <p class="caption">{vs}{t.calls:,} turns · {fmt_tokens(t.tokens)} tokens</p></div>
   <div class="stat"><span class="label">Daily rate</span>
     <div class="value">{fmt_usd(t.cost / m.period.days)}/day</div>
     <p class="caption">{fmt_usd(m.today_cost)} today so far · {f"budget pace {fmt_usd(m.budget_pace)}/day" if m.budget_pace else "no monthly budget set"}</p></div>
   <div class="stat"><span class="label">Cost per turn</span>
     <div class="value">{fmt_usd(per_turn, 4) if per_turn is not None else "—"}</div>
-    <p class="caption">{len(t.sessions):,} sessions{f" · cache hit {hit * 100:.0f}%, {fmt_usd(m.cache_saved)} saved" if hit else ""}</p></div>
+    <p class="caption">{len(t.sessions):,} sessions{direct_text}{f" · cache hit {hit * 100:.0f}%" if hit else ""}</p></div>
 </div>"""
 
 
@@ -285,9 +325,11 @@ def budgets_section(m: Model) -> str:
         rows = []
         # A glob budget ("every task") shows the values that need attention; the healthy rest fold into one line.
         shown = [x for x in m.meters if not x.each or x.state != WITHIN]
-        folded = Counter((x.scope_key, x.window) for x in m.meters if x.each and x.state == WITHIN)
+        folded = Counter((", ".join(x.scope), x.window) for x in m.meters if x.each and x.state == WITHIN)
         for x in shown:
-            kind = "hard limit: stops factory runs" if x.hard else "alert only"
+            kind = ("hard limit: stops factory runs" if x.hard and not x.runtime and x.window != "latest run"
+                    else "hard limit: stops the run" if x.hard and x.window == "latest run"
+                    else "hard limit: the product enforces it" if x.hard else "alert only")
             rows.append(f"""
   <div class="budget">
     <div class="budget-head"><span class="budget-name">{esc(x.label)}</span>
@@ -297,42 +339,108 @@ def budgets_section(m: Model) -> str:
       <span class="pct">{x.pct_text}</span></div>
     {status_mark(x.state, x.word)}
   </div>""")
-        for (key, window), n in sorted(folded.items(), key=lambda kv: str(kv[0])):
+        for (keys, window), n in sorted(folded.items()):
             rows.append(f'<p class="caption">{status_mark(WITHIN, "Within budget")} {n} more '
-                        f'{esc(key)}{"s" if n != 1 else ""}, {esc(window)}</p>')
+                        f'{esc(keys)} value{"s" if n != 1 else ""}, {esc(window)}</p>')
         body = "".join(rows)
-        lines = sorted({(x.warn, x.danger) for x in m.meters})
-        ticks = " · ".join(f"{w:g}% and {d:g}%" for w, d in lines)
+        ticks = " · ".join(f"{w:g}% and {d:g}%" for w, d in sorted({(x.warn, x.danger) for x in m.meters}))
     return f"""
 <section class="card">
   <h2>Spending budgets</h2>
-  <p class="caption">Ticks mark {ticks} · the figure is not clamped, so over the limit reads as over</p>
+  <p class="caption">Ticks mark {ticks} · the figure is not clamped, so over the limit reads as over · department
+  budgets steer (alert only); project, factory-run and runtime budgets are hard caps unless set otherwise</p>
   {body}
 </section>"""
 
 
-def table(noun: str, rows: list[dict], dp: int, extra: str = "") -> str:
+def table(noun: str, rows: list[dict], dp: int, extra: str = "", calls: str = "Turns") -> str:
     max_cost = max((r["t"].cost for r in rows), default=0)
     body = []
     for r in rows:
         name = f'{esc(r["name"])} ({r["other"]})' if r["other"] else esc(r["name"])
         bar = r["t"].cost / max_cost * 100 if max_cost else 0
         body.append(f"""<tr><td class="{"muted" if r["other"] else ""} name">{name}</td>
-<td class="num muted">{r["t"].turns:,}</td><td class="num muted">{fmt_tokens(r["t"].tokens)}</td>
+<td class="num muted">{r["t"].calls:,}</td><td class="num muted">{fmt_tokens(r["t"].tokens)}</td>
 <td class="num">{fmt_usd(r["t"].cost, dp)}</td>
 <td class="share">{mini_bar(bar)}<span class="caption num">{r["pct"]:.0f}%</span></td></tr>""")
     foot = ""
     if len(rows) > 1:
-        tot = Totals()
-        for r in rows:
-            tot.cost += r["t"].cost
-            tot.turns += r["t"].turns
-            tot.tokens += r["t"].tokens
-        foot = (f'<tfoot><tr><td>Total</td><td class="num">{tot.turns:,}</td><td class="num">{fmt_tokens(tot.tokens)}'
-                f'</td><td class="num">{fmt_usd(tot.cost, dp)}</td><td></td></tr></tfoot>')
+        cost = sum(r["t"].cost for r in rows)
+        n = sum(r["t"].calls for r in rows)
+        tok = sum(r["t"].tokens for r in rows)
+        foot = (f'<tfoot><tr><td>Total</td><td class="num">{n:,}</td><td class="num">{fmt_tokens(tok)}'
+                f'</td><td class="num">{fmt_usd(cost, dp)}</td><td></td></tr></tfoot>')
     return f"""<div class="scroll"><table>
-<thead><tr><th>{esc(noun)}</th><th class="num">Turns</th><th class="num">Tokens</th><th class="num">Cost ($)</th>
+<thead><tr><th>{esc(noun)}</th><th class="num">{calls}</th><th class="num">Tokens</th><th class="num">Cost ($)</th>
 <th class="share-h">Share</th></tr></thead><tbody>{"".join(body)}</tbody>{foot}</table></div>{extra}"""
+
+
+def grid_section(m: Model) -> str:
+    g = m.grid
+    if not g["rows"]:
+        return ""
+    total_cost = sum(row[2] for row in g["rows"])
+    dp = cost_dp([total_cost])
+    top = max(g["rows"], key=lambda row: row[2])
+    top_project = max(g["totals"].items(), key=lambda kv: kv[1]) if g["totals"] else ("—", 0)
+    title = (f"{esc(m.dept(top[0]))} took {top[2] / total_cost * 100:.0f}% of spend; "
+             f"{esc(top_project[0])} {top_project[1] / total_cost * 100:.0f}%") if total_cost else "Department × project"
+    head = "".join(f'<th class="num">{esc(c)}</th>' for c in g["projects"])
+    body = []
+    for dept, cells, row_total in g["rows"]:
+        tds = "".join(f'<td class="num{" muted" if not cells.get(c) else ""}">'
+                      f'{fmt_usd(cells[c], dp) if cells.get(c) else "—"}</td>' for c in g["projects"])
+        share = row_total / total_cost * 100 if total_cost else 0
+        inferred = ' <span class="caption">inferred</span>' if dept == m.direct else ""
+        body.append(f'<tr><td class="name">{esc(m.dept(dept))}{inferred}</td>{tds}'
+                    f'<td class="num">{fmt_usd(row_total, dp)}</td>'
+                    f'<td class="share">{mini_bar(share)}<span class="caption num">{share:.0f}%</span></td></tr>')
+    foot = "".join(f'<td class="num">{fmt_usd(g["totals"][c], dp)}</td>' for c in g["projects"])
+    return f"""
+<section class="card">
+  <h2>{title}</h2>
+  <p class="caption">Departments are functions, projects are repos: each cell is one department's spend in one
+  project · {esc(m.dept(m.direct))} is the principal's own sessions outside any pipeline skill (the only inferred row)</p>
+  <div class="scroll"><table>
+  <thead><tr><th>Department</th>{head}<th class="num">Total</th><th class="share-h">Share</th></tr></thead>
+  <tbody>{"".join(body)}</tbody>
+  <tfoot><tr><td>Total</td>{foot}<td class="num">{fmt_usd(total_cost, dp)}</td><td></td></tr></tfoot>
+  </table></div>
+</section>"""
+
+
+def landed_section(m: Model) -> str:
+    if m.landed is None or not m.landed:
+        return ""
+    rows = [r for r in m.landed if r.landed or r.open or r.unchecked]
+    landed_all = sum(r.landed_cost for r in m.landed)
+    dp = cost_dp([r.landed_cost for r in m.landed] + [r.open_cost for r in m.landed])
+    any_unchecked = any(r.unchecked for r in m.landed)
+    n = m.landed_tasks
+    title = (f"{n} task{'s' if n != 1 else ''} landed, at {fmt_usd(landed_all / n)} each across every department"
+             if n else "No task has landed in this period")
+    body = []
+    for r in rows:
+        unchecked = (f'<td class="num">{r.unchecked}</td><td class="num muted">{fmt_usd(r.unchecked_cost, dp)}</td>'
+                     if any_unchecked else "")
+        body.append(f"""<tr><td class="name">{esc(m.dept(r.department))}</td>
+<td class="num">{r.landed}</td><td class="num">{fmt_usd(r.landed_cost, dp)}</td>
+<td class="num">{fmt_usd(r.per_landed) if r.per_landed is not None else "—"}</td>
+<td class="num">{r.open}</td><td class="num muted">{fmt_usd(r.open_cost, dp)}</td>{unchecked}
+<td class="num muted">{fmt_usd(r.no_task_cost, dp)}</td></tr>""")
+    unchecked_head = '<th class="num">Not checked</th><th class="num">Their spend</th>' if any_unchecked else ""
+    return f"""
+<section class="card">
+  <h2>{title}</h2>
+  <p class="caption">A task has landed when a branch it ran on merged as a pull request (asked of GitHub with
+  <code>gh</code>) · a task is counted in every department that spent on it · {fmt_usd(landed_all)} went to landed
+  tasks{" · not checked: the repo has no main checkout here or gh could not answer" if any_unchecked else ""}</p>
+  <div class="scroll"><table>
+  <thead><tr><th>Department</th><th class="num">Landed tasks</th><th class="num">Their spend</th>
+  <th class="num">Per landed task</th><th class="num">Not landed</th><th class="num">Their spend</th>{unchecked_head}
+  <th class="num">No task</th></tr></thead>
+  <tbody>{"".join(body)}</tbody></table></div>
+</section>"""
 
 
 def breakdowns(m: Model) -> str:
@@ -342,11 +450,16 @@ def breakdowns(m: Model) -> str:
             cells.append(f'<section><h3 class="label">{fallback}</h3><p class="caption">No usage in this period</p></section>')
             continue
         dp = cost_dp([r["t"].cost for r in rows])
-        cells.append(f'<section><h3 class="label">{esc(share_title(rows, fallback))}</h3>{table(noun, rows, dp)}</section>')
+        extra = ""
+        if noun == "Model" and m.unpriced:
+            extra = (f'<p class="note">{status_mark(APPROACHING, "No price")} {esc(", ".join(m.unpriced))}: counted at '
+                     "$0 — add them under <code>[cost.prices]</code></p>")
+        cells.append(f'<section><h3 class="label">{esc(share_title(rows, fallback))}</h3>{table(noun, rows, dp, extra)}</section>')
     return f"""
 <section class="card">
   <h2>Where the spend went</h2>
-  <p class="caption">Four cuts of the same period total · each sorted by cost · share is of the total</p>
+  <p class="caption">Four more cuts of the same total · each sorted by cost · share is of the total · a process is the
+  skill, subagent type or factory capability a turn ran in (— = none)</p>
   <div class="grid2">{"".join(cells)}</div>
 </section>"""
 
@@ -359,36 +472,48 @@ def sessions_section(m: Model) -> str:
     for s in m.sessions:
         t = s["t"]
         when = t.first.astimezone(m.now.tzinfo).strftime("%-d %b %H:%M") if t.first else "—"
-        rows.append(f"""<tr><td class="mono">{esc(s["id"][:8])}</td><td>{esc(s["repo"])}</td>
-<td class="name">{esc(s["branch"] or "—")}</td><td>{esc(agent_words(s["agent"]))}</td><td>{esc(s["task"])}</td>
-<td class="num muted">{esc(when)}</td><td class="num muted">{t.turns:,}</td><td class="num muted">{fmt_tokens(t.tokens)}</td>
+        rows.append(f"""<tr><td class="mono">{esc(s["id"][:8])}</td><td>{esc(s["project"])}</td>
+<td class="name">{esc(s["branch"] or "—")}</td><td>{esc(m.dept(s["department"]))}</td>
+<td>{esc(agent_words(s["agent"]))}</td><td>{esc(s["task"])}</td>
+<td class="num muted">{esc(when)}</td><td class="num muted">{t.calls:,}</td><td class="num muted">{fmt_tokens(t.tokens)}</td>
 <td class="num muted">{s["sub_pct"]:.0f}%</td><td class="num">{fmt_usd(t.cost, dp)}</td></tr>""")
-    top_cost = sum(s["t"].cost for s in m.sessions)
-    share = top_cost / m.spend.cost * 100 if m.spend.cost else 0
+    share = sum(s["t"].cost for s in m.sessions) / m.spend.cost * 100 if m.spend.cost else 0
     return f"""
 <section class="card">
   <h2>The {len(m.sessions)} costliest sessions took {share:.0f}% of spend</h2>
-  <p class="caption">A session with its subagents · ids are Claude Code session ids (the transcript's file name)</p>
+  <p class="caption">A session with its subagents · department: where most of its spend went · ids are Claude Code
+  session ids (the transcript's file name)</p>
   <div class="scroll"><table>
-  <thead><tr><th>Session</th><th>Repo</th><th>Branch</th><th>Agent</th><th>Task</th><th class="num">Started</th>
-  <th class="num">Turns</th><th class="num">Tokens</th><th class="num">Subagents</th><th class="num">Cost ($)</th></tr></thead>
+  <thead><tr><th>Session</th><th>Project</th><th>Branch</th><th>Department</th><th>Agent</th><th>Task</th>
+  <th class="num">Started</th><th class="num">Turns</th><th class="num">Tokens</th><th class="num">Subagents</th>
+  <th class="num">Cost ($)</th></tr></thead>
   <tbody>{"".join(rows)}</tbody></table></div>
 </section>"""
 
 
-def models_section(m: Model) -> str:
-    if not m.models:
+def runtime_section(m: Model) -> str:
+    rt = m.runtime
+    if rt is None:
         return ""
-    dp = cost_dp([r["t"].cost for r in m.models])
-    note = ""
-    if m.unpriced:
-        note = (f'<p class="note">{status_mark(APPROACHING, "No price")} {esc(", ".join(m.unpriced))}: counted at $0 — '
-                "add them under <code>[cost.prices]</code></p>")
+    t = rt["total"]
+    if not t.calls:
+        body = '<p class="muted">No runtime model calls in this period.</p>'
+        title = "Run: the products' own model spend"
+    else:
+        dp_d = cost_dp([r["t"].cost for r in rt["departments"]])
+        dp_p = cost_dp([r["t"].cost for r in rt["projects"]])
+        body = (f'<div class="grid2"><section><h3 class="label">{esc(share_title(rt["departments"], "By the app’s department"))}</h3>'
+                f'{table("Department", rt["departments"], dp_d, calls="Calls")}</section>'
+                f'<section><h3 class="label">{esc(share_title(rt["projects"], "By project"))}</h3>'
+                f'{table("Project", rt["projects"], dp_p, calls="Calls")}</section></div>')
+        title = f"Run: the products spent {fmt_usd(t.cost)} on their own model calls"
     return f"""
 <section class="card">
-  <h2>{esc(share_title(m.models, "Model mix"))}</h2>
-  <p class="caption">Priced per model at API list rates: input, output, cache writes (5-minute, 1-hour) and cache reads</p>
-  {table("Model", m.models, dp, note)}
+  <h2>{title}</h2>
+  <p class="caption">Runtime usage the product reports itself (<code>[efficiency] runtime_usage</code>), grouped by
+  the product's own departments · separate from agent spend above, never added to it · from
+  {esc(", ".join(rt["configured"]) or "—")}</p>
+  {body}
 </section>"""
 
 
@@ -465,6 +590,7 @@ td{padding:6px 12px;border-bottom:1px solid color-mix(in srgb,var(--border) 55%,
 th:first-child,td:first-child{padding-left:0}th:last-child,td:last-child{padding-right:0}
 tbody tr:last-child td{border-bottom:0}
 tfoot td{border-top:1px solid var(--border);font-weight:500}
+th.num{text-align:right}
 .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
 .name{max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
@@ -503,9 +629,11 @@ sessions, subagents and factory runs{plan} · another period: <code>factory cost
 <section class="card"><h2>{esc(spend_trend_title(m))}</h2>
 <p class="caption">Daily agent spend, USD{" · dashed rule is the daily pace the monthly budget allows" if m.budget_pace else ""}</p>
 {daily_chart(m)}</section>
+{grid_section(m)}
+{landed_section(m)}
 {breakdowns(m)}
 {sessions_section(m)}
-{models_section(m)}
+{runtime_section(m)}
 {cache_section(m)}
 {notes}
 </main></body></html>

@@ -16,6 +16,7 @@ import signal
 import subprocess
 import time
 from pathlib import Path
+from typing import Callable
 
 from . import config as config_mod
 from .config import CONFIG_NAME, Config
@@ -37,20 +38,34 @@ _NOT_OPTED_IN = -1001
 _INVALID_CONFIG = -1002
 _SETUP_FAILED = -1003
 _TIMED_OUT = 124
+_OVER_BUDGET = 125  # the run's hard per-run cap ([[budgets]] run_spend_usd) was passed
 
 
-def _sh(cmd: str | list[str], cwd: Path, env: dict, log, timeout: float | None = None) -> int:
+def _sh(cmd: str | list[str], cwd: Path, env: dict, log, timeout: float | None = None,
+        watch: Callable[[], str | None] | None = None, every: float = 60.0) -> int:
+    """Run `cmd` in its own process group. `watch` is asked every `every` seconds; a reason back stops the group."""
     log.write(f"\n$ {cmd if isinstance(cmd, str) else shlex.join(cmd)}\n")
     log.flush()
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env, shell=isinstance(cmd, str), stdout=log, stderr=subprocess.STDOUT, start_new_session=True
     )
+    deadline = None if timeout is None else time.monotonic() + timeout
     try:
-        return proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        _stop_group(proc)
-        log.write(f"\nfactory: timed out after {timeout:.0f}s; process group killed\n")
-        return _TIMED_OUT
+        while True:
+            left = None if deadline is None else max(0.0, deadline - time.monotonic())
+            step = left if watch is None else (every if left is None else min(every, left))
+            try:
+                return proc.wait(timeout=step)
+            except subprocess.TimeoutExpired:
+                if deadline is not None and time.monotonic() >= deadline:
+                    _stop_group(proc)
+                    log.write(f"\nfactory: timed out after {timeout:.0f}s; process group killed\n")
+                    return _TIMED_OUT
+                reason = watch() if watch else None
+                if reason:
+                    _stop_group(proc)
+                    log.write(f"\nfactory: stopped — {reason}\n")
+                    return _OVER_BUDGET
     except BaseException:
         _stop_group(proc)  # our own SIGTERM/^C: take the child's whole group down with us, for good
         raise
@@ -232,6 +247,27 @@ def budget_blockers(cfg: Config, capability: str) -> list[str]:
     return cost.run_blockers(cfg.root, capability)
 
 
+def run_budget_watch(cfg: Config, capability: str, worktree: Path) -> Callable[[], str | None] | None:
+    """A check of the run's own spend against the lowest hard `run_spend_usd` cap on it; None without one."""
+    from . import cost, usage
+
+    try:
+        settings = cost.Settings.load(None, cfg.root)
+    except Exception:  # noqa: BLE001 — a broken budget file already held the run at the gate
+        return None
+    cap = cost.run_cap(settings, cfg.name, capability)
+    if cap is None:
+        return None
+    limit, source = cap
+    prices = settings.prices(cfg.name)
+
+    def check() -> str | None:
+        spent = usage.spend_under(worktree, prices=prices)
+        return f"spent {cost.fmt_usd(spent)} of its {cost.fmt_usd(limit)} per-run cap (set in {source})" if spent > limit else None
+
+    return check
+
+
 def agent_output_path(log_path: Path) -> Path:
     return log_path.with_suffix(".agent.md")
 
@@ -337,5 +373,10 @@ def _prepare_and_run(cfg: Config, capability: str, worktree: Path, branch: str, 
     argv, run_env = invocation
     log.write(f"\n$ {shlex.join(argv)}  (output → {agent_output_path(log_path)})\n")
     log.flush()
+    watch = run_budget_watch(cfg, capability, worktree)
     with open(agent_output_path(log_path), "w") as out:
-        return _sh(argv, worktree, run_env, out, timeout=wcfg.agent_timeout_minutes * 60)
+        code = _sh(argv, worktree, run_env, out, timeout=wcfg.agent_timeout_minutes * 60, watch=watch,
+                   every=float(os.environ.get("FACTORY_BUDGET_POLL", 60)))
+    if code == _OVER_BUDGET:
+        print(f"factory: {capability} run stopped at its per-run spend cap — see {log_path}")
+    return code
