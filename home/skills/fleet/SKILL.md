@@ -11,6 +11,8 @@ description: >-
   agents", "approve the X one", "tell the X agent to…", "show me the X agent", "start an agent on…", "merge the X PR".
 argument-hint: "[status | resume | watch | stop | <instruction for the fleet>]"
 allowed-tools: Bash(orca *), Bash(gh pr *), Bash(gh run *), Bash(python3 ~/.claude/skills/fleet/scripts/fleet.py*), mcp__plugin_telegram_telegram__reply, mcp__plugin_telegram_telegram__react, mcp__plugin_telegram_telegram__edit_message
+metadata:
+  department: cos
 ---
 
 # Fleet: Orca control tower

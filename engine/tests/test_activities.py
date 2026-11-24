@@ -17,7 +17,7 @@ from unittest import mock
 from temporalio.exceptions import ApplicationError
 from temporalio.testing import ActivityEnvironment
 
-from engine import process
+from engine import factory, process
 from engine import settings as settings_mod
 from engine.activities import agent, repo as repo_acts
 from engine.activities.teams import TeamActivities, team_dir
@@ -346,7 +346,20 @@ class SpendSwitchTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(install, "SETTINGS", Path(f.name)):
             self.assertEqual((await ActivityEnvironment().run(acts.check_budget, ref)).verdict, "stop")
             Path(f.name).write_text("unattended = true\n")
-            self.assertEqual((await ActivityEnvironment().run(acts.check_budget, ref)).verdict, "go")
+            with mock.patch.object(factory.cost, "run_blockers", return_value=[]) as check:
+                self.assertEqual((await ActivityEnvironment().run(acts.check_budget, ref)).verdict, "go")
+            check.assert_called_once_with(Path("/r"), "qa")
+
+    async def test_a_hard_budget_over_its_limit_stops_the_run_with_the_reason(self):
+        acts = TeamActivities(mock.MagicMock(), EngineSettings())
+        ref = TeamRef(repo="/r", repo_name="d", team="qa")
+        with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
+            f.write("unattended = true\n")
+        self.addCleanup(os.unlink, f.name)
+        with mock.patch.object(install, "SETTINGS", Path(f.name)), \
+             mock.patch.object(factory.cost, "run_blockers", return_value=["✕ Over limit: department upkeep"]):
+            answer = await ActivityEnvironment().run(acts.check_budget, ref)
+        self.assertEqual((answer.verdict, answer.reason), ("stop", "budget ✕ Over limit: department upkeep"))
 
 
 class BuildIdTest(unittest.TestCase):

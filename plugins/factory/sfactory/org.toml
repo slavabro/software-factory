@@ -1,0 +1,65 @@
+# The factory's default org: departments are functions, not repos (a project cuts across them). The shape follows a
+# product's org registry: each department has an id, a name, a description, who it reports to, and the processes and
+# agents it owns. Here those are skills (as invoked: "factory:upgrade", "fleet"), subagent types and factory
+# capabilities (`factory run` / engine teams). A skill may instead declare its department in its own SKILL.md
+# (`metadata: department: <id>`); a repo maps its own skills in its .factory.toml ([org.skills]). The user file
+# (~/.config/software-factory/factory.toml) can rename, describe or extend any department, or add one.
+# Reference: docs/factory-toml.md, section "Org".
+
+[org]
+name = "Software factory"
+direct = "direct"   # the one inferred bucket: a turn no skill, subagent type or capability claims
+
+[[org.departments]]
+id = "cos"
+name = "Chief of Staff"
+description = "Runs the factory: the tower, the fleet of agents, the orchestrator and the decision queue"
+reports_to = "principal"
+skills = []        # the fleet skill declares itself (home/skills/fleet)
+agents = []
+capabilities = []
+
+[[org.departments]]
+id = "product"
+name = "Product"
+description = "Intake and shaping: an idea recorded, questions asked, split into small tasks"
+reports_to = "cos"
+
+[[org.departments]]
+id = "design"
+name = "Design"
+description = "UX and technical design of a task, its review and compaction"
+reports_to = "cos"
+agents = ["Plan"]
+
+[[org.departments]]
+id = "engineering"
+name = "Engineering"
+description = "Builds: code and tests on a branch"
+reports_to = "cos"
+
+[[org.departments]]
+id = "quality"
+name = "Quality"
+description = "Review and the reviewer lenses: code, security, design, QA"
+reports_to = "cos"
+skills = ["code-review", "security-review", "review"]
+
+[[org.departments]]
+id = "release"
+name = "Release"
+description = "Lands work: PRs, the gate, CI follow-up, deploys"
+reports_to = "cos"
+
+[[org.departments]]
+id = "upkeep"
+name = "Upkeep"
+description = "Standing teams: dependency upgrades, efficiency, skills review"
+reports_to = "cos"
+capabilities = ["upgrade", "efficiency"]
+
+[[org.departments]]
+id = "direct"
+name = "Direct"
+description = "The principal's own sessions outside any pipeline skill"
+reports_to = "principal"
