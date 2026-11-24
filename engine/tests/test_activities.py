@@ -356,7 +356,7 @@ class SpendSwitchTest(unittest.IsolatedAsyncioTestCase):
         with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
             f.write("unattended = true\n")
         self.addCleanup(os.unlink, f.name)
-        with mock.patch.object(settings_mod, "CONFIG_PATH", Path(f.name)), \
+        with mock.patch.object(install, "SETTINGS", Path(f.name)), \
              mock.patch.object(factory.cost, "run_blockers", return_value=["✕ Over limit: department upkeep"]):
             answer = await ActivityEnvironment().run(acts.check_budget, ref)
         self.assertEqual((answer.verdict, answer.reason), ("stop", "budget ✕ Over limit: department upkeep"))
