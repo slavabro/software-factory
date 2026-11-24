@@ -54,6 +54,12 @@ max_prs = 3                   # per run; the upgrade capability is also the engi
 dir = "specs"                 # repo-relative folder of <capability>.md files; keep it out of every workflow's paths-ignore
 resolver = "pytest"           # how a cited test is found without running it: pytest node IDs, by AST
 
+[sdlc]                        # the repo's SDLC: processes, gates and own blocks (docs/factory-sdlc.md)
+dir = ".factory"              # repo-relative folder: processes/*.json, gates.json, blocks/*.toml
+skills_dirs = [".claude/skills"]  # where a repo agent block's skill lives
+extra_models = []             # model aliases beyond the factory catalog's
+extra_events = []             # event names this repo's sources deliver, beyond the catalog's
+
 [teams.qa]                    # a standing team the engine runs (docs/designs/engine.md); one table per team
 prompt = "/factory:qa"        # required: what the agent session is asked to do
 schedule = "0 2 * * *"        # cron in the engine's time zone; "off" (default) = events and `factory engine run-now` only
@@ -118,6 +124,7 @@ the fix, when:
 | `factory upgrade scan [--json]` | what can move, how far (patch / minor / major), risky or not, release-notes links |
 | `<check> 2>&1 \| factory upgrade deprecations` | deprecation warnings raised from the repo's own code; exit 1 while any |
 | `factory task …` | the task system ([tasks.md](tasks.md)): `init`, `new`, `start`, `subtask`, `complete`, `close`, `set`, `show`, `check`, `check-pr`, `render`, `exists`; with `system = "commands"` only `new` / `exists`, running the repo's commands with every value shell-quoted |
+| `factory sdlc check` · `blocks` · `block REF` · `show P` · `templates` · `new P --from T` | the repo's SDLC ([factory-sdlc.md](factory-sdlc.md)): validate its processes and gates, list blocks and their cards, resolve a process's settings, start a process from a template |
 | `factory spec check` | every capability spec in `[specs] dir` is well formed, history-free and proven by tests that exist; exit 1 with each problem and its fix |
 | `factory run upgrade [--dry-run] [--keep]` | the whole upgrade unattended: fresh worktree off `origin/<default_branch>`, `[worktree] setup`, then the agent runs `/factory:upgrade`; one run per repo at a time; log under `~/.cache/software-factory/logs/<repo>/` |
 | `factory engine install --repo PATH` | the engine runs this repo's teams: each team's `schedule` becomes a Temporal Schedule (in the engine's time zone, `engine.toml` `time_zone`, default the machine's), paused until its first run by hand |

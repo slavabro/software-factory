@@ -1,0 +1,14 @@
+kind = "agent"
+name = "Upgrade agent"
+does = "Reads every release note between our version and the latest, changes the code for breaking changes and deprecations, proves it with verify, and lands grouped PRs; risky moves become tasks."
+skill = "upgrade"
+inputs = ["the repo's manifests ([upgrade] in .factory.toml)"]
+outputs = { pr = 3, task = 20, report = 1 }
+emits = []
+runs_in = ["engine", "session"]
+needs = ["verify"]
+tools = ["github-read", "github-write", "repo-commands"]
+[defaults]
+model = "sonnet"
+autonomy = "pr"
+budget_minutes = 90

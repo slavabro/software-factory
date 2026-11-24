@@ -1,0 +1,6 @@
+kind = "check"
+name = "Verify"
+does = "Runs the repo's [verify] commands; the process goes on only when they pass."
+run_from = "verify"
+runs_in = ["session", "engine", "ci"]
+needs = ["verify"]

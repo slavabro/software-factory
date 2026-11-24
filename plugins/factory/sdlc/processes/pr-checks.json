@@ -1,0 +1,15 @@
+{
+  "name": "PR checks",
+  "description": "The checks every PR runs in CI; their result is the one check a merge waits for.",
+  "runs_in": ["ci"],
+  "triggers": [
+    {"event": "pr.opened"}
+  ],
+  "stages": [
+    {"name": "Checks", "steps": ["verify", "tasks"]}
+  ],
+  "steps": [
+    {"id": "verify", "type": "check", "block": "factory:verify"},
+    {"id": "tasks", "type": "check", "block": "factory:tasks"}
+  ]
+}

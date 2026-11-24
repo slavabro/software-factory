@@ -1,0 +1,89 @@
+# The factory's SDLC catalog: every vocabulary a block, process or gate may use. Projects add to some of it in
+# .factory.toml [sdlc]; nothing here names a project. Reference: docs/factory-sdlc.md.
+
+models = ["opus", "sonnet", "haiku"]          # model tier aliases an agent step may name (F-41 maps them)
+autonomy = ["read", "edit", "pr"]             # least to most; an agent never merges: the merge gate does
+asks = ["always", "until-trusted", "when", "never"]   # how a human step or gate asks; "when" needs `ask_when`
+executors = ["session", "engine", "ci"]       # where a process may run
+human_outcomes = ["approved", "changes", "rejected", "timeout"]   # a human step's exits
+input_types = ["task", "issue", "pr", "text"] # what a click asks for
+trust_after = 10                              # approvals as is in a row before trust is offered (D-7)
+max_retries = 5                               # a check's on_fail.retries ceiling
+chain_depth = 3                               # processes starting each other through events stop at this depth
+
+# An output an agent may return, and the least autonomy that may return it.
+[outputs]
+comment = "read"
+task = "read"
+report = "read"
+files = "edit"
+pr = "pr"
+
+# Tools an agent may use (the permission lists behind them are the repo's [agent] settings).
+[tools]
+github-read = "read issues, PRs, CI runs and releases"
+github-write = "open PRs, comment, label; never merge"
+repo-commands = "the repo's own commands ([agent] allowed tools)"
+browser = "drive the running app"
+
+# Resources a gate guards. Every step that touches one, in any process, passes its gates.
+[resources]
+merge = "a PR merging into the default branch"
+deploy = "a command that deploys to an environment (gates name the environment)"
+
+# Events the factory delivers. Events a process emits are known too, and a project adds its own ([sdlc] extra_events).
+[events]
+"pr.opened" = "GitHub: a pull request opened"
+"pr.merged" = "GitHub: a pull request merged"
+"pr.review_requested" = "GitHub: a review requested"
+"ci.failed" = "GitHub: a CI run failed"
+"ci.passed" = "GitHub: a CI run passed"
+"issue.opened" = "GitHub: an issue opened"
+"issue.labeled" = "GitHub: a label added to an issue"
+"comment.command" = "GitHub: a `/factory <process>` comment"
+"task.created" = "task system: a task recorded"
+"task.ready" = "task system: a task ready to start"
+"task.done" = "task system: a task completed"
+"incident.opened" = "support desk: an incident opened"
+
+# Values a step or gate takes when neither it nor its block sets them.
+[defaults.agent]
+model = "sonnet"
+autonomy = "read"
+budget_minutes = 30
+fresh_context = false
+
+[defaults.check]
+blocking = true
+
+[defaults.human]
+asks = "always"
+timeout_hours = 168
+
+# Gates a project has until its gates file says otherwise.
+[[default_gates]]
+id = "merge"
+name = "Merge"
+on = "merge"
+asks = "until-trusted"
+
+[[default_gates]]
+id = "production"
+name = "Production deploy"
+on = "deploy"
+env = "production"
+asks = "always"
+
+# Floors always ask, whatever a project's gates say; a project's gates file can't name or change them (D-11).
+# `paths` are globs ({dir} = the project's [sdlc] dir); `first` = only the first time for that resource.
+[[floors]]
+id = "factory-config"
+on = "merge"
+reason = "a PR changing the factory's configuration of the repo or its CI"
+paths = [".factory.toml", "{dir}/**", ".github/workflows/**"]
+
+[[floors]]
+id = "first-deploy"
+on = "deploy"
+reason = "a project's first deploy to an environment"
+first = true

@@ -1,0 +1,16 @@
+{
+  "name": "Skills review",
+  "description": "Keeps the repo's skills and CLAUDE.md files true to the code.",
+  "runs_in": ["engine", "session"],
+  "triggers": [
+    {"schedule": "0 7 * * 1"},
+    {"manual": {}}
+  ],
+  "limits": {"concurrent": 1},
+  "stages": [
+    {"name": "Review", "steps": ["review"]}
+  ],
+  "steps": [
+    {"id": "review", "type": "agent", "block": "factory:skills-review"}
+  ]
+}

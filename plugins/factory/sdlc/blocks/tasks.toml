@@ -1,0 +1,5 @@
+kind = "check"
+name = "Task check"
+does = "Task records are valid, IDs unique and the generated tables current."
+run = ["factory task check"]
+runs_in = ["session", "engine", "ci"]

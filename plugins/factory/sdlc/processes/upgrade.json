@@ -1,0 +1,16 @@
+{
+  "name": "Upgrade",
+  "description": "Moves the repo's dependencies forward: grouped PRs for safe upgrades, tasks for risky ones.",
+  "runs_in": ["engine", "session"],
+  "triggers": [
+    {"schedule": "0 6 * * 1"},
+    {"manual": {}}
+  ],
+  "limits": {"concurrent": 1, "budget_minutes": 120},
+  "stages": [
+    {"name": "Upgrade", "steps": ["upgrade"]}
+  ],
+  "steps": [
+    {"id": "upgrade", "type": "agent", "block": "factory:upgrade"}
+  ]
+}

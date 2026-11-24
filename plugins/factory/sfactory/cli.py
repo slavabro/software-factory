@@ -6,6 +6,7 @@
     factory task ...                       the task system (`factory task --help`); with [tasks] system = "commands"
                                            only `new --title T --body-file F [--priority P]` and `exists QUERY`,
                                            which run the repo's [tasks] new / exists with every value quoted
+    factory sdlc ...                       the repo's SDLC: blocks, processes, gates (`factory sdlc --help`)
     factory spec check                     every capability spec ([specs] dir) is well formed and each cited test exists
     factory run CAPABILITY [--dry-run]     run a capability once, here and now, in a fresh worktree (e.g. `upgrade`);
                                            scheduled and event-driven runs belong to the engine
@@ -25,7 +26,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from . import config as config_mod
-from . import deprecations, engine, runner, specs, tasks, upgrade
+from . import deprecations, engine, runner, sdlc, specs, tasks, upgrade
 
 
 def _root(path: Path | None) -> Path:
@@ -67,6 +68,16 @@ def main(argv: list[str] | None = None) -> int:
     lead = 2 if argv[:1] == ["--repo"] else 0
     if argv[lead:lead + 1] == ["task"]:  # its own parser: options after `task` belong to it
         return task(argv[lead + 1:], Path(argv[1]) if lead else None)
+    if argv[lead:lead + 1] == ["sdlc"]:  # its own parser, like task
+        rest, repo = argv[lead + 1:], Path(argv[1]) if lead else None
+        if "--repo" in rest:
+            i = rest.index("--repo")
+            repo, rest = Path(rest[i + 1]), rest[:i] + rest[i + 2:]
+        try:
+            return sdlc.main(rest, config_mod.load(_root(repo)))
+        except sdlc.SdlcError as e:  # a factory file is broken: say which, never a traceback
+            print(f"factory sdlc: {e}", file=sys.stderr)
+            return 1
     if argv[:1] == ["engine"]:  # machine-wide, not per repo: it takes its own --repo options
         return engine.main(argv[1:])
     ap = argparse.ArgumentParser(prog="factory", description=__doc__.split("\n\n")[0])
@@ -82,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     dp.add_argument("--base", type=Path, help="directory the tool ran in (default: repo root)")
     spc = sub.add_parser("spec").add_subparsers(dest="action", required=True).add_parser("check")
     sub.add_parser("task", help="the task system: factory task --help")  # parsed by task() above
+    sub.add_parser("sdlc", help="the repo's SDLC: factory sdlc --help")  # parsed by sdlc.main above
     rn = sub.add_parser("run")
     rn.add_argument("capability")
     rn.add_argument("--dry-run", action="store_true")

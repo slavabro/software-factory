@@ -1,0 +1,11 @@
+kind = "agent"
+name = "Skills reviewer"
+does = "Audits every skill, command, subagent and CLAUDE.md file against the code, scores triggers and token cost, and fixes drift."
+skill = "skills-review"
+outputs = { pr = 1, report = 1 }
+runs_in = ["engine", "session"]
+tools = ["github-read", "github-write"]
+[defaults]
+model = "sonnet"
+autonomy = "pr"
+budget_minutes = 45

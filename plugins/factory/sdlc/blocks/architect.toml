@@ -1,0 +1,14 @@
+kind = "agent"
+name = "Architect"
+does = "Writes the technical design for one task, for review by lenses."
+status = "planned"
+task = "F-11"
+inputs = ["task"]
+outputs = { files = 1 }
+emits = ["design.ready"]
+runs_in = ["engine", "session"]
+tools = ["github-read"]
+[defaults]
+model = "opus"
+autonomy = "edit"
+budget_minutes = 60

@@ -1,0 +1,8 @@
+kind = "agent"
+name = "Support agent"
+does = "Investigates an incident with read-only tools: runbook first, then a diagnosis, an allowed action or a fix PR."
+status = "planned"
+task = "F-24"
+outputs = { pr = 1, task = 1, comment = 1 }
+runs_in = ["engine"]
+tools = ["github-read"]

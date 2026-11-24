@@ -71,6 +71,16 @@ class Specs:
     resolver: str = "pytest"  # how a `Proven by:` entry is found without running it (sfactory/specs.py RESOLVERS)
 
 
+@dataclass
+class Sdlc:
+    """The project's SDLC (docs/factory-sdlc.md): its processes, gates and own blocks live in `dir`."""
+
+    dir: str = ".factory"  # repo-relative folder: processes/*.json, gates.json, blocks/*.toml
+    skills_dirs: list[str] = field(default_factory=lambda: [".claude/skills"])  # where `repo:` agent skills live
+    extra_models: list[str] = field(default_factory=list)  # model aliases beyond the factory catalog's
+    extra_events: list[str] = field(default_factory=list)  # event names this repo's sources deliver
+
+
 # Why a team is woken besides its schedule (engine events, docs/designs/engine.md).
 WAKE_REASONS = ("ci_red", "deploy_failed", "incident", "merged")
 
@@ -112,6 +122,7 @@ class Config:
     report_with: str = ""  # shell command run with {file} = the run's digest; empty = path printed to the log
     upgrade: Upgrade = field(default_factory=Upgrade)
     specs: Specs = field(default_factory=Specs)
+    sdlc: Sdlc = field(default_factory=Sdlc)
     extra_teams: dict[str, Team] = field(default_factory=dict)  # [teams.<name>]
 
     def teams(self) -> dict[str, Team]:
@@ -138,6 +149,7 @@ SECTIONS = {
     "report": {"with"},
     "upgrade": {f.name for f in fields(Upgrade)},
     "specs": {f.name for f in fields(Specs)},
+    "sdlc": {f.name for f in fields(Sdlc)},
     "teams": set(),  # one table per team, keys TEAM_KEYS
 }
 TEAM_KEYS = {f.name for f in fields(Team)}
@@ -156,7 +168,7 @@ def _check(raw: dict, path: Path) -> None:
         for key in body:
             if key not in SECTIONS[section]:
                 raise ConfigError(f"{path}: unknown key {section}.{key} (known: {', '.join(sorted(SECTIONS[section]))})")
-    for section, defaults in (("upgrade", Upgrade()), ("specs", Specs())):
+    for section, defaults in (("upgrade", Upgrade()), ("specs", Specs()), ("sdlc", Sdlc())):
         for key, value in raw.get(section, {}).items():
             want = type(getattr(defaults, key))
             if not isinstance(value, want) or (want is int and isinstance(value, bool)):
@@ -169,12 +181,27 @@ def _check(raw: dict, path: Path) -> None:
     folder = Path(specs.get("dir", Specs.dir))
     if not specs.get("dir", Specs.dir).strip() or folder.is_absolute() or ".." in folder.parts or folder == Path("."):
         raise ConfigError(f"{path}: specs.dir must be a folder inside the repo, e.g. \"specs\"")
+    sdlc = raw.get("sdlc", {})
+    for key in ("dir",):
+        if key in sdlc and not _inside(sdlc[key]):
+            raise ConfigError(f"{path}: sdlc.{key} must be a folder inside the repo, e.g. \".factory\"")
+    for key in ("skills_dirs", "extra_models", "extra_events"):
+        if not all(isinstance(v, str) and v.strip() for v in sdlc.get(key, [])):
+            raise ConfigError(f"{path}: sdlc.{key} must be a list of non-empty strings")
+    if not all(_inside(d) for d in sdlc.get("skills_dirs", [])):
+        raise ConfigError(f"{path}: sdlc.skills_dirs must be folders inside the repo")
     pattern = raw.get("tasks", {}).get("id_pattern")
     if pattern is not None:
         try:
             re.compile(str(pattern))
         except re.error as e:
             raise ConfigError(f"{path}: tasks.id_pattern is not a regular expression ({e})") from None
+
+
+def _inside(rel: str) -> bool:
+    """A non-empty repo-relative folder that stays inside the repo."""
+    folder = Path(rel)
+    return bool(rel.strip()) and not folder.is_absolute() and ".." not in folder.parts and folder != Path(".")
 
 
 def _check_teams(teams: dict, path: Path) -> None:
@@ -253,5 +280,7 @@ def parse(root: Path, text: str | None, path: Path) -> Config:
         setattr(cfg.upgrade, key, value)
     for key, value in raw.get("specs", {}).items():
         setattr(cfg.specs, key, value)
+    for key, value in raw.get("sdlc", {}).items():
+        setattr(cfg.sdlc, key, value)
     cfg.extra_teams = {name: Team(**body) for name, body in raw.get("teams", {}).items()}
     return cfg
