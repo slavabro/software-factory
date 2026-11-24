@@ -134,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"spec check FAILED: {len(report.failures)} problems ({counts})", file=sys.stderr)
             return 1
         print(f"spec check passed: {counts}")
+        return 0
     if args.cmd == "efficiency" and args.action == "scan":
         try:
             report = efficiency.scan(cfg, since=args.since, all_repos=True if args.all else None)
@@ -149,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"factory: no session {args.session!r} with model requests", file=sys.stderr)
             return 1
         efficiency.place(s)
+        s.department = efficiency.department_of(s, efficiency.Org([s.repo_root]))
         print(json.dumps(efficiency.timeline(s), indent=2) if args.json else efficiency.show_text(s))
         return 0
     if args.cmd == "run":

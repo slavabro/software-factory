@@ -18,16 +18,41 @@ checks the worst sessions and files fixes.
 | App runtime | `[efficiency] runtime_usage`: a command in the product repo printing JSONL (schema below) | the repo whose config names it |
 
 `[efficiency] scope = "repo"` scans the repo, its worktrees and `[efficiency] repos`; `"all"` (or `--all`) scans every
-project. A session counts when it was active in the window; its whole cost counts (v0.1 does not cut a session at
-the window's start).
+project. Spend counts each model request once (by message id across transcripts: a resumed or forked session copies
+earlier turns into its own file) and only inside the window, as F-33's `usage.py` does. The detectors read whole
+sessions active in the window, since a pattern does not stop at its edge.
+
+## Project and department
+
+Every finding carries its **project** (the repo, worktrees folded in) and the **department** that owns the work. The
+departments are functions: Chief of Staff, Product, Design, Engineering, Quality, Release, Upkeep, and Direct (the
+principal's own work); the project is a separate dimension. A session's department, first that applies:
+
+1. the last skill or command invoked in it that declares a department;
+2. for a subagent, its declared type, else its parent's department;
+3. for a factory run, its capability's skill (the run's prompt, e.g. `/factory:upgrade`);
+4. otherwise **Direct**.
+
+A declaration today is `department:` in the front matter of a skill, command or subagent file, top level or under
+`metadata:` (the factory's skills declare `metadata: department: Upkeep`). **TODO(F-33, PR #26):** #26 settles the
+one declaration mechanism (`org/org_structure.yaml`, agents declaring `department:`) and the `[org]` config;
+`efficiency.Org` and `department_of` then read that, so the costs page and the scout never disagree on an owner.
+Cross-session findings take the owner of most of their sessions (`base-context`) or of the biggest one
+(`duplicate-effort`); runtime findings take the department the app's own export names (`unassigned` when it names
+none). The digest totals spend, findings and $ at stake per department, so fixes go to the department that owns them.
 
 ## Cost model
 
-Per request: input, 5-minute and 1-hour cache writes (1.25x and 2x input price), cache reads (0.1x) and output, at
-list prices per model family (`PRICES`). A tool call costs its share of the request that made it plus its result
-carried by every later request until the next compaction: `tokens × price × (1.25 + 0.1 × later requests)`. *At
-stake* is what the pattern cost: an upper bound on the saving; findings overlap (a big read inside a long session).
-Prices move to `usage.py` (F-31) when it lands, so both report the same dollar.
+Per request: input, 5-minute and 1-hour cache writes, cache reads and output, at API list prices per model
+(`PRICES`, mirroring F-33's table; **TODO(F-33):** read usage.py's table once #26 lands, and build `Turn` from its
+records). A tool call costs its share of the request that made it plus its result carried by every later request
+until the next compaction: `tokens × (cache write price + cache read price × later requests)`. *At stake* is what the
+pattern cost: an upper bound on the saving; findings overlap (a big read inside a long session).
+
+Reconciled with F-33's reader on 2026-11-24, 30 days, all projects: $3,568 here against $3,564 from
+`usage.records` (0.1%). The first run's $4,957 came from family prices (Opus 5.5 priced as $5 / $25 / $0.50 cache
+read instead of $4 / $20 / $0.20) and from counting whole sessions instead of the window; streamed blocks were
+already merged by message id.
 
 ## Detectors
 
@@ -58,17 +83,21 @@ can be turned off with `[efficiency] disabled`. A finding below `min_usd` (0.25)
 Skills and CLAUDE.md files loaded every session are measured as `base-context`; their sizes come from `skillcheck`
 and the judgement from `/factory:skills-review`.
 
-## Runtime usage schema (v1)
+## Runtime usage schema (v2)
 
 One JSON object per line on stdout; `{since}` in the command is replaced by the window start (ISO 8601, shell-quoted).
-Required: `ts`, `model`.
+Required: `ts`, `model`. v2 adds `department` and `process`; a v1 line (without them, without `v`) is still read. A
+line with a newer `v` than the reader knows is reported, not guessed.
 
 | Field | Type | Meaning |
 |---|---|---|
+| v | int | schema version, 2 (optional; absent = 1) |
 | ts | ISO 8601 | when the call was made |
 | kind | `llm_call` \| `agent_job` | default `llm_call` |
 | agent | string | who called (agent, department or service) |
 | task | string | what for (job type, caller, workflow type) |
+| department | string | the app's own department that owns the agent, from the app's org declaration (v2); kept as given |
+| process | string | the process or workflow run the call belonged to, if any (v2) |
 | run_id | string | groups the calls of one job or run (optional) |
 | model | string | the model that answered |
 | input_tokens, output_tokens, cache_write_tokens, cache_read_tokens | int | default 0 |
@@ -82,7 +111,8 @@ Required: `ts`, `model`.
 ## Output
 
 `factory efficiency scan [--since 7d] [--all] [--json] [--top N]`: the window's totals, the top findings (at most
-three per detector; `--json` has all), totals per detector, corrections, permission prompts and cost per repo.
+three per detector; `--json` has all) with project and department, spend and $ at stake per department, totals per
+detector, corrections, permission prompts and cost per project.
 `factory efficiency show SESSION [--json]`: one session's calls with paths, command names, sizes, cost and letter flags
 (E error, P approval, S sleep). `factory run efficiency` and the engine's team `efficiency` (`[efficiency] enabled`,
 `schedule`) run the skill unattended; the digest goes through `[report] with`.
@@ -100,4 +130,5 @@ A failing `runtime_usage` command is reported by exit code only (its stderr may 
 - [x] `[efficiency]` documented in [factory-toml.md](../factory-toml.md); tests for every detector, the config and
   privacy.
 - [ ] The product repo emits runtime usage (its own task) and a scheduled run files its first fixes.
-- [ ] `Turn` and `price` come from `usage.py` (F-31) once it lands.
+- [x] Every finding carries project and department; the digest groups by department; totals match F-33's reader.
+- [ ] `Turn`, `price` and the department declaration come from F-33 (`usage.py`, the org declaration) once #26 lands.

@@ -2,6 +2,8 @@
 name: skills-review
 description: Audits every skill, command, subagent and CLAUDE.md file a repo and the user load — runs skillcheck, verifies each claim against the code, scores trigger quality and token cost — then writes a verdict report and applies the approved fixes. Use when asked to review, audit, clean up or optimise skills, or when skillcheck reports drift.
 argument-hint: "[repo path] [--apply]"
+metadata:
+  department: Upkeep
 ---
 
 # Skills review

@@ -10,6 +10,9 @@ Privacy: transcripts hold private data. Nothing here keeps prompt text, file con
 reduced to metrics, ids, timestamps, file paths, tool names and command names (`command_head`) while it is read,
 and every finding is built from those alone.
 
+Project and department: every finding carries the project (the repo, worktrees folded in) and the department
+that owns the work, resolved per session as `department_of` says, so fixes are grouped by who owns them.
+
 Usage and pricing: `usage.py` (F-31) owns per-message usage records and the price table. This module reads the
 richer event stream it needs (tool calls, their inputs and result sizes, errors, prompts) itself; once usage.py
 lands, `Turn` should come from its records and `price` from its table, so the two never disagree on a dollar.
@@ -47,6 +50,11 @@ DETECTORS = (
 # Detectors that count events rather than dollars: reported by count, never dropped by min_usd.
 COUNTED = {"permission-prompts", "user-correction"}
 
+# Departments are functions; the project is a separate dimension. Work with no declared owner is the principal's own.
+DEPARTMENTS = ("Chief of Staff", "Product", "Design", "Engineering", "Quality", "Release", "Upkeep", "Direct")
+DIRECT = "Direct"
+UNASSIGNED = "unassigned"  # a runtime record that names no department
+
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 SPAWN_TOOLS = {"Agent", "Task"}
 POLL_TOOLS = {"BashOutput", "TaskOutput"}
@@ -62,25 +70,36 @@ DEFAULT_CORRECTIONS = {
     "why": r"^why (did|do|are|is|would|didn'?t|not|does|should)\b",
 }
 
-# $ per million tokens (input, output), first match wins. Cache writes cost 1.25x input (5-minute) or 2x (1-hour),
-# cache reads 0.1x. A stand-in for usage.py's table (F-31); estimates, not invoices.
-PRICES = [
-    (r"<synthetic>", 0.0, 0.0),
-    (r"opus-4(-1)?(-\d{8})?$|claude-3-opus", 15.0, 75.0),
-    (r"opus", 5.0, 25.0),
-    (r"sonnet", 3.0, 15.0),
-    (r"haiku-([4-9])", 1.0, 5.0),
-    (r"haiku", 0.8, 4.0),
+# $ per million tokens: (input, output, 5-minute cache write, 1-hour cache write, cache read), first match wins.
+# TODO(F-33, PR #26): usage.py owns the price table. These rows mirror its values for the models in use so both
+# report the same dollar; when #26 lands, `price` reads usage.py's table and this list goes.
+Price = tuple[float, float, float, float, float]
+PRICES: list[tuple[str, Price]] = [
+    (r"<synthetic>", (0, 0, 0, 0, 0)),
+    (r"opus-5-5", (4, 20, 5, 8, 0.20)),
+    (r"opus-4(-1)?(-\d{8})?$|opus-4-1|claude-3-opus", (15, 75, 18.75, 30, 1.50)),
+    (r"opus", (5, 25, 6.25, 10, 0.50)),
+    (r"sonnet-5-5", (2, 10, 2.5, 4, 0.10)),
+    (r"sonnet-5", (2, 10, 2.5, 4, 0.20)),
+    (r"sonnet", (3, 15, 3.75, 6, 0.30)),
+    (r"haiku-5", (0.10, 0.50, 0.125, 0.20, 0.01)),
+    (r"haiku-4", (1, 5, 1.25, 2, 0.10)),
+    (r"haiku", (0.8, 4, 1.0, 1.6, 0.08)),
 ]
-DEFAULT_PRICE = (3.0, 15.0)
+DEFAULT_PRICE: Price = (3, 15, 3.75, 6, 0.30)
 CHEAPER_TIER_SAVING = 0.6  # share of cost a move one tier down saves (top tier to mid tier at list prices)
 
-# Runtime usage, one JSON object per line. Required: ts, model. Everything else defaults as shown.
+# Runtime usage, one JSON object per line. Required: ts, model. Everything else defaults as shown. v2 added
+# `department` and `process`; a v1 line (without them) is still read.
+RUNTIME_SCHEMA = 2
 RUNTIME_FIELDS = {
+    "v": "schema version, 2 (optional)",
     "ts": "ISO 8601 time of the call",
     "kind": "llm_call | agent_job (default llm_call)",
     "agent": "who made the call (agent, department or service name)",
     "task": "what it was for (job type, caller, workflow type)",
+    "department": "the app's own department that owns the agent (from its org declaration); v2",
+    "process": "the process or workflow the call ran in, if any; v2",
     "run_id": "groups the calls of one job, session or workflow run (optional)",
     "model": "the model that answered",
     "input_tokens": "int, default 0",
@@ -105,6 +124,7 @@ class Turn:
 
     ts: float
     model: str
+    mid: str = ""  # message id: a resumed or forked session copies earlier turns into its own file
     input: int = 0
     output: int = 0
     cache_write: int = 0
@@ -118,9 +138,9 @@ class Turn:
 
     @property
     def usd(self) -> float:
-        pin, pout = price(self.model)
+        pin, pout, pw5, pw1h, pread = price(self.model)
         cw5 = self.cache_write - self.cache_write_1h
-        return (self.input * pin + cw5 * pin * 1.25 + self.cache_write_1h * pin * 2 + self.cache_read * pin * 0.1
+        return (self.input * pin + cw5 * pw5 + self.cache_write_1h * pw1h + self.cache_read * pread
                 + self.output * pout) / 1e6
 
 
@@ -164,6 +184,7 @@ class Session:
     prompts: list[Prompt] = field(default_factory=list)
     compactions: list[int] = field(default_factory=list)  # turn index each compaction happened before
     skills: Counter = field(default_factory=Counter)
+    skill_order: list[str] = field(default_factory=list)  # skills and commands invoked, in order
     # Filled in after reading:
     repo: str = ""  # display name
     repo_root: str = ""  # main checkout, when known
@@ -171,6 +192,7 @@ class Session:
     origin: str = "session"  # session | factory-run
     capability: str = ""
     children_usd: float = 0.0
+    department: str = DIRECT
 
     @property
     def start(self) -> float:
@@ -193,10 +215,10 @@ class Session:
         return any(a < c <= b for c in self.compactions)
 
 
-def price(model: str) -> tuple[float, float]:
-    for pattern, pin, pout in PRICES:
+def price(model: str) -> Price:
+    for pattern, row in PRICES:
         if re.search(pattern, model or ""):
-            return pin, pout
+            return row
     return DEFAULT_PRICE
 
 
@@ -353,7 +375,7 @@ def read_session(path: str, corrections: list[tuple[str, str]] | None = None) ->
                 usage = msg.get("usage") or {}
                 if mid not in by_msg:
                     by_msg[mid] = len(s.turns)
-                    s.turns.append(Turn(ts=ts, model=str(msg.get("model") or "")))
+                    s.turns.append(Turn(ts=ts, model=str(msg.get("model") or ""), mid=str(mid)))
                 t = s.turns[by_msg[mid]]
                 t.input = max(t.input, int(usage.get("input_tokens") or 0))
                 t.output = max(t.output, int(usage.get("output_tokens") or 0))
@@ -368,6 +390,7 @@ def read_session(path: str, corrections: list[tuple[str, str]] | None = None) ->
                         calls[c.id] = c
                         if c.name == "Skill" and c.target:
                             s.skills[c.target] += 1
+                            s.skill_order.append(c.target)
             elif kind == "user":
                 content = msg.get("content")
                 blocks = content if isinstance(content, list) else []
@@ -390,6 +413,7 @@ def read_session(path: str, corrections: list[tuple[str, str]] | None = None) ->
                 m = re.search(r"<command-name>/?([\w:.-]+)</command-name>", text[:500])
                 if m:
                     s.skills[m.group(1)] += 1
+                    s.skill_order.append(m.group(1))
                 if text.lstrip().startswith("This session is being continued"):
                     s.compactions.append(len(s.turns))
                 pk = _prompt_kind(r, text)
@@ -457,6 +481,78 @@ def adopt(sessions: list[Session]) -> None:
                 s.repo_root, s.repo = next(iter(owners))
 
 
+class Org:
+    """Who owns what: the department each skill, command and subagent type declares.
+
+    A declaration is a `department:` line in the file's front matter, top level or under `metadata:` (the one place
+    skill front matter allows extra keys), e.g. the factory's own skills declare `metadata: department: Upkeep`.
+    Files read: the factory plugin's skills (as `factory:<name>`), each project's `.claude/skills`, `.claude/commands`
+    and `.claude/agents`, and the user's `~/.claude/skills` and `~/.claude/agents`.
+
+    TODO(F-33, PR #26): #26 settles the one declaration mechanism (org/org_structure.yaml, agents declaring
+    `department:`) and the `[org]` config. When it lands, this class reads that instead of front matter, and the
+    session-to-department rule moves there too, so the costs page and this scout never disagree on an owner.
+    """
+
+    LINE = re.compile(r"^\s*department:\s*[\"']?([^\"'#\n]+?)[\"']?\s*(#.*)?$", re.M)
+
+    def __init__(self, roots: list[str]):
+        self.owners: dict[str, str] = {}
+        factory_skills = Path(__file__).resolve().parents[1] / "skills"
+        self._scan(factory_skills.glob("*/SKILL.md"), prefix="factory:")
+        home = Path.home() / ".claude"
+        for base in [home, *(Path(r) / ".claude" for r in roots if r)]:
+            self._scan(base.glob("skills/*/SKILL.md"))
+            self._scan(base.glob("commands/*.md"))
+            self._scan(base.glob("agents/*.md"))
+
+    def _scan(self, files, prefix: str = "") -> None:
+        for f in files:
+            try:
+                text = f.read_text(errors="replace")
+            except OSError:
+                continue
+            if not text.startswith("---"):
+                continue
+            block = text[3:text.find("\n---", 3)] if "\n---" in text[3:] else ""
+            m = self.LINE.search(block)
+            if m:
+                name = f.parent.name if f.name == "SKILL.md" else f.stem
+                self.owners.setdefault(prefix + name, normalise_department(m.group(1)))
+
+    def of(self, name: str) -> str:
+        """The declared department of a skill, command or subagent type; "" when none is declared."""
+        name = name.lstrip("/")
+        return self.owners.get(name) or self.owners.get(name.split(":")[-1], "")
+
+
+def normalise_department(value: str) -> str:
+    v = " ".join(value.replace("-", " ").replace("_", " ").split())
+    return next((d for d in DEPARTMENTS if d.lower() == v.lower()), v)
+
+
+def capability_skill(capability: str) -> str:
+    """The skill a factory capability runs (`factory run` prompts; an engine team named like its skill)."""
+    prompt = runner.PROMPTS.get(capability, f"/factory:{capability}")
+    return prompt.split()[0].lstrip("/")
+
+
+def department_of(s: Session, org: Org, parent: Session | None = None) -> str:
+    """The owner of a session's work, first that applies: the last skill or command invoked in it that declares a
+    department; for a subagent, its declared type, then whoever owns its parent; for a factory run, its
+    capability's skill; otherwise Direct (the principal's own work)."""
+    for skill in reversed(s.skill_order):
+        if org.of(skill):
+            return org.of(skill)
+    if s.is_subagent and org.of(s.agent_type):
+        return org.of(s.agent_type)
+    if parent is not None:
+        return parent.department
+    if s.capability and org.of(capability_skill(s.capability)):
+        return org.of(capability_skill(s.capability))
+    return DIRECT
+
+
 HOME_DIR = str(Path.home())
 
 
@@ -477,7 +573,8 @@ def short_id(session: str) -> str:
 @dataclass
 class Finding:
     detector: str
-    repo: str
+    project: str  # the repo, its worktrees folded in
+    department: str  # who owns the work (department_of); runtime: the app's own department
     session: str  # "" for a finding across sessions
     usd: float  # at stake: an upper bound on what avoiding it saves; findings can overlap
     tokens: int
@@ -502,9 +599,9 @@ def call_cost(s: Session, c: Call) -> tuple[int, float]:
     t = s.turns[c.turn]
     share = 1 / max(t.n_tools, 1)
     later = s.turns_after(c.turn)
-    pin, _ = price(t.model)
+    _, _, write, _, read = price(t.model)
     tokens = int((t.context + t.output) * share) + c.result_tokens * (1 + later)
-    return tokens, t.usd * share + c.result_tokens * pin * (1.25 + 0.1 * later) / 1e6
+    return tokens, t.usd * share + c.result_tokens * (write + read * later) / 1e6
 
 
 def _sum(s: Session, calls: list[Call]) -> tuple[int, float]:
@@ -533,14 +630,16 @@ class Scout:
     def ignored(self, path: str) -> bool:
         return any(fnmatch(path, g) for g in self.eff.ignore)
 
-    def add(self, s: Session | None, detector: str, calls_or_cost, count: int, what: str, items=None, repo=""):
+    def add(self, s: Session | None, detector: str, calls_or_cost, count: int, what: str, items=None, repo="",
+            department=DIRECT):
         if not self.on(detector):
             return
         tokens, usd = calls_or_cost
         if detector not in COUNTED and usd < self.lim("min_usd"):
             return
         self.findings.append(Finding(
-            detector, s.repo if s else repo, s.id if s else "", round(usd, 2), int(tokens), count, what,
+            detector, s.repo if s else repo, s.department if s else department, s.id if s else "", round(usd, 2),
+            int(tokens), count, what,
             _source(s) if s else "session", _when(s.start) if s else "", items=list(items or []),
         ))
 
@@ -644,16 +743,16 @@ class Scout:
             else:
                 continue
             rebuilds[cause] += 1
-            pin, _ = price(t.model)
+            _, _, write, _, read = price(t.model)
             tokens += t.cache_write
-            usd += t.cache_write * pin * (1.25 - 0.1) / 1e6
+            usd += t.cache_write * (write - read) / 1e6
         if rebuilds:
             n = sum(rebuilds.values())
             self.add(s, "cache-rebuild", (tokens, usd), n, f"{n} prompt-cache rebuilds mid-session", _top(rebuilds))
         limit = self.lim("long_context_tokens")
         over = [t for t in s.turns if t.context > limit]
         if over:
-            usd = sum((t.context - limit) * price(t.model)[0] * 0.1 / 1e6 for t in over)
+            usd = sum((t.context - limit) * price(t.model)[4] / 1e6 for t in over)
             self.add(s, "long-context", (sum(t.context - limit for t in over), usd), len(over),
                      f"{len(over)} requests carried over {int(limit // 1000)}k tokens of context "
                      f"(peak {max(t.context for t in over) // 1000}k, {len(s.compactions)} compactions)")
@@ -710,16 +809,17 @@ class Scout:
                 by_repo[s.repo].append(s)
         limit = self.lim("base_context_tokens")
         for repo, group in by_repo.items():
+            owner = Counter(s.department for s in group).most_common(1)[0][0]  # loaded for every session: the main user
             base = statistics.median(s.turns[0].context for s in group)
             if base <= limit:
                 continue
             extra = base - limit
-            usd = sum(extra * price(s.turns[0].model)[0] * 0.1 * len(s.turns) / 1e6 for s in group)
+            usd = sum(extra * price(s.turns[0].model)[4] * len(s.turns) / 1e6 for s in group)
             skills = sum((s.skills for s in group), Counter())
             self.add(None, "base-context", (int(extra * sum(len(s.turns) for s in group)), usd), len(group),
                      f"sessions start at {int(base) // 1000}k tokens of context (budget {int(limit) // 1000}k), "
                      f"carried by every request; skills and commands used over {len(group)} sessions listed",
-                     _top(skills, 8) or ["no skill invoked"], repo=repo)
+                     _top(skills, 8) or ["no skill invoked"], repo=repo, department=owner)
 
     def duplicates(self, sessions: list[Session]) -> None:
         main = [s for s in sessions if not s.is_subagent]
@@ -764,10 +864,11 @@ class Scout:
                 shared = set.intersection(*(edits[s.id] for s in cluster)) or set.union(*(edits[s.id] for s in cluster))
                 branches = sorted({s.branch for s in cluster if s.branch})
                 f_before = len(self.findings)
+                owner = max(cluster, key=lambda s: s.usd + s.children_usd).department
                 self.add(None, "duplicate-effort", (0, sum(costs[1:])), len(cluster),
                          f"{len(cluster)} sessions in {len({s.worktree for s in cluster})} worktrees worked the same "
                          f"files or branch ({', '.join(branches[:3]) or 'no branch'})",
-                         sorted(shared)[:5], repo=repo)
+                         sorted(shared)[:5], repo=repo, department=owner)
                 if len(self.findings) > f_before:
                     self.findings[-1].sessions = [s.id for s in cluster]
                     self.findings[-1].when = _when(min(s.start for s in cluster))
@@ -776,35 +877,38 @@ class Scout:
 
     def runtime(self, records: list[dict], repo: str) -> None:
         by_hash: dict[str, list[dict]] = defaultdict(list)
-        by_job: dict[tuple[str, str], list[dict]] = defaultdict(list)
+        by_job: dict[tuple[str, str, str], list[dict]] = defaultdict(list)
         for r in records:
             if r.get("prompt_hash"):
                 by_hash[r["prompt_hash"]].append(r)
-            by_job[(r["agent"], r["task"])].append(r)
+            by_job[(r["department"], r["agent"], r["task"])].append(r)
         repeats = [rs for rs in by_hash.values() if len(rs) >= self.lim("runtime_repeat_min")]
         for rs in repeats:
             extra = rs[1:]
             self.add(None, "runtime-repeat-prompt", (sum(_rt_tokens(r) for r in extra), sum(r["cost_usd"] for r in extra)),
                      len(rs), f"the same prompt sent {len(rs)} times by {rs[0]['agent']} / {rs[0]['task']} "
-                     f"({sum(r['cache_read_tokens'] for r in rs)} tokens read from cache)", [rs[0]["model"]], repo=repo)
-        for (agent, task), rs in by_job.items():
-            label = f"{agent} / {task}"
+                     f"({sum(r['cache_read_tokens'] for r in rs)} tokens read from cache)", [rs[0]["model"]], repo=repo,
+                     department=rs[0]["department"])
+        for (dept, agent, task), rs in by_job.items():
+            processes = sorted({r["process"] for r in rs if r["process"]})
+            label = f"{agent} / {task}" + (f" (process {', '.join(processes[:2])})" if processes else "")
             failed = [r for r in rs if r["outcome"] in ("error", "retry", "expired") or r["attempt"] > 1]
             if failed:
                 self.add(None, "runtime-retry", (sum(_rt_tokens(r) for r in failed), sum(r["cost_usd"] for r in failed)),
                          len(failed), f"{len(failed)} of {len(rs)} calls by {label} failed or were retries",
-                         _top(Counter(r["outcome"] for r in failed)), repo=repo)
+                         _top(Counter(r["outcome"] for r in failed)), repo=repo, department=dept)
             unused = [r for r in rs if r["output_used"] is False]
             if unused:
                 self.add(None, "runtime-unused", (sum(_rt_tokens(r) for r in unused), sum(r["cost_usd"] for r in unused)),
-                         len(unused), f"{len(unused)} of {len(rs)} results of {label} were never used", repo=repo)
+                         len(unused), f"{len(unused)} of {len(rs)} results of {label} were never used", repo=repo,
+                         department=dept)
             top = [r for r in rs if any(fnmatch(r["model"], g) for g in self.eff.expensive_models)]
             if len(top) >= 5 and statistics.median(r["output_tokens"] for r in top) <= self.lim("runtime_trivial_output_tokens"):
                 cost = sum(r["cost_usd"] for r in top)
                 self.add(None, "runtime-expensive-model", (sum(_rt_tokens(r) for r in top), cost * CHEAPER_TIER_SAVING),
                          len(top), f"{label} runs a top-tier model for short answers "
                          f"(median {int(statistics.median(r['output_tokens'] for r in top))} output tokens, ${cost:.2f})",
-                         sorted({r["model"] for r in top})[:3], repo=repo)
+                         sorted({r["model"] for r in top})[:3], repo=repo, department=dept)
 
 
 def _rt_tokens(r: dict) -> int:
@@ -824,18 +928,21 @@ def parse_runtime(text: str) -> tuple[list[dict], list[str]]:
             r = json.loads(line)
             if not isinstance(r, dict) or not r.get("ts") or not r.get("model"):
                 raise ValueError("ts and model are required")
+            if int(r.get("v") or 1) > RUNTIME_SCHEMA:
+                raise ValueError(f"schema v{r['v']} is newer than this reader (v{RUNTIME_SCHEMA})")
             rec = {
                 "ts": _ts(r["ts"]), "kind": str(r.get("kind") or "llm_call"), "agent": str(r.get("agent") or "?"),
                 "task": str(r.get("task") or "?"), "run_id": str(r.get("run_id") or ""), "model": str(r["model"]),
+                "department": str(r.get("department") or UNASSIGNED), "process": str(r.get("process") or ""),
                 "prompt_hash": str(r.get("prompt_hash") or ""), "outcome": str(r.get("outcome") or "ok"),
                 "attempt": int(r.get("attempt") or 1), "output_used": r.get("output_used"),
             }
             for k in ("input_tokens", "output_tokens", "cache_write_tokens", "cache_read_tokens"):
                 rec[k] = int(r.get(k) or 0)
             if r.get("cost_usd") is None:
-                pin, pout = price(rec["model"])
-                rec["cost_usd"] = (rec["input_tokens"] * pin + rec["cache_write_tokens"] * pin * 1.25
-                                   + rec["cache_read_tokens"] * pin * 0.1 + rec["output_tokens"] * pout) / 1e6
+                pin, pout, write, _, read = price(rec["model"])
+                rec["cost_usd"] = (rec["input_tokens"] * pin + rec["cache_write_tokens"] * write
+                                   + rec["cache_read_tokens"] * read + rec["output_tokens"] * pout) / 1e6
             else:
                 rec["cost_usd"] = float(r["cost_usd"])
             out.append(rec)
@@ -891,7 +998,8 @@ class Report:
     tokens: int
     cache_read_share: float
     findings: list[Finding]
-    repos: list[dict]
+    projects: list[dict]
+    departments: list[dict]
     runtime_calls: int = 0
     runtime_usd: float = 0.0
     errors: list[str] = field(default_factory=list)
@@ -948,6 +1056,7 @@ def scan(cfg: Config, since: str | None = None, all_repos: bool | None = None, p
     for s in sessions:
         place(s)
     adopt(sessions)
+    org = Org(sorted({s.repo_root for s in sessions if s.repo_root}))
     # A subagent belongs to its parent's place (its own cwd can be anywhere).
     parents = {s.id: s for s in sessions if not s.is_subagent}
     for s in sessions:
@@ -955,6 +1064,8 @@ def scan(cfg: Config, since: str | None = None, all_repos: bool | None = None, p
         if p:
             s.repo, s.repo_root, s.origin, s.capability = p.repo, p.repo_root, p.origin, p.capability
             s.worktree = s.worktree or p.worktree
+    for s in sorted(sessions, key=lambda s: s.is_subagent):  # parents first: a subagent may inherit
+        s.department = department_of(s, org, parents.get(s.parent_id) if s.is_subagent else None)
     roots, names = _wanted(cfg)
     keep = []
     for s in sessions:
@@ -978,28 +1089,46 @@ def scan(cfg: Config, since: str | None = None, all_repos: bool | None = None, p
         records, errors = read_runtime(cfg, cutoff)
         scout.runtime(records, cfg.name)
 
-    turns = [t for s in keep for t in s.turns]
+    # Spend counts each model request once (by message id, across transcripts) and only inside the window, as
+    # usage.py does; the detectors read whole sessions, since a pattern does not stop at the window's edge.
+    seen: set[str] = set()
+    counted: dict[str, list[Turn]] = {}
+    for s in sorted(keep, key=lambda s: s.start):
+        counted[s.id + s.path] = [t for t in s.turns if t.ts >= cutoff and not (t.mid in seen or seen.add(t.mid))]
+    turns = [t for ts in counted.values() for t in ts]
     read = sum(t.cache_read for t in turns)
     all_in = sum(t.context for t in turns) or 1
-    repos = []
+    projects = []
     for repo in sorted({s.repo for s in keep}):
         group = [s for s in keep if s.repo == repo]
-        rt = [t for s in group for t in s.turns]
-        repos.append({
-            "repo": repo, "sessions": sum(not s.is_subagent for s in group),
+        rt = [t for s in group for t in counted[s.id + s.path]]
+        projects.append({
+            "project": repo, "sessions": sum(not s.is_subagent for s in group),
             "usd": round(sum(t.usd for t in rt), 2),
-            "subagent_usd": round(sum(s.usd for s in group if s.is_subagent), 2),
-            "factory_run_usd": round(sum(s.usd for s in group if s.origin == "factory-run"), 2),
+            "subagent_usd": round(sum(t.usd for s in group if s.is_subagent for t in counted[s.id + s.path]), 2),
+            "factory_run_usd": round(sum(t.usd for s in group if s.origin == "factory-run"
+                                         for t in counted[s.id + s.path]), 2),
             "cache_read_share": round(sum(t.cache_read for t in rt) / (sum(t.context for t in rt) or 1), 3),
         })
-    repos.sort(key=lambda r: -r["usd"])
+    projects.sort(key=lambda r: -r["usd"])
     findings = sorted(scout.findings, key=lambda f: (-f.usd, -f.count))
+    departments = []
+    for dept in sorted({s.department for s in keep} | {f.department for f in findings}):
+        mine = [f for f in findings if f.department == dept]
+        departments.append({
+            "department": dept,
+            "usd": round(sum(t.usd for s in keep if s.department == dept for t in counted[s.id + s.path]), 2),
+            "findings": len(mine), "at_stake_usd": round(sum(f.usd for f in mine if f.detector not in COUNTED), 2),
+            "detectors": [f"{d} ${v:,.2f}" for d, v in Counter(
+                {d: sum(f.usd for f in mine if f.detector == d) for d in {f.detector for f in mine}}).most_common(4)],
+        })
+    departments.sort(key=lambda d: -d["at_stake_usd"])
     return Report(
         since=_when(cutoff), scope="all repos" if all_repos else repo_name(cfg),
         sessions=sum(not s.is_subagent for s in keep), subagents=sum(s.is_subagent for s in keep),
         factory_runs=sum(s.origin == "factory-run" and not s.is_subagent for s in keep),
         usd=round(sum(t.usd for t in turns), 2), tokens=sum(t.context + t.output for t in turns),
-        cache_read_share=round(read / all_in, 3), findings=findings, repos=repos,
+        cache_read_share=round(read / all_in, 3), findings=findings, projects=projects, departments=departments,
         runtime_calls=len(records), runtime_usd=round(sum(r["cost_usd"] for r in records), 2), errors=errors,
     )
 
@@ -1036,14 +1165,20 @@ def markdown(report: Report, top: int = 20) -> str:
     out += ["", "## Top findings", "",
             f"At most {PER_DETECTOR} per detector; the full list is `--json`. At stake = what the pattern cost (an upper "
             "bound on the saving; findings can overlap).", "",
-            "| # | Detector | At stake | Tokens | Repo | Session | When | What | Top items |",
-            "|---|---|---|---|---|---|---|---|---|"]
+            "| # | Detector | At stake | Tokens | Project | Department | Session | When | What | Top items |",
+            "|---|---|---|---|---|---|---|---|---|---|"]
     for i, f in enumerate(priced[:top], 1):
         sess = short_id(f.session) if f.session else (", ".join(short_id(x) for x in f.sessions[:3]) or "all")
-        out.append(f"| {i} | {f.detector} | ${f.usd:,.2f} | {_tok(f.tokens)} | {f.repo} | {sess} ({f.source}) | "
+        out.append(f"| {i} | {f.detector} | ${f.usd:,.2f} | {_tok(f.tokens)} | {f.project} | {f.department} | {sess} ({f.source}) | "
                    f"{f.when} | {_cell(f.what)} | {_cell('; '.join(f.items[:4]))} |")
     if not priced:
-        out.append("| — | nothing above the thresholds | | | | | | | |")
+        out.append("| — | nothing above the thresholds | | | | | | | | |")
+    out += ["", "## By department", "",
+            "Fixes go to the department that owns the work: its skills, its agents, its runs.", "",
+            "| Department | Spend | Findings | At stake | Biggest patterns ($) |", "|---|---|---|---|---|"]
+    for d in report.departments:
+        out.append(f"| {d['department']} | ${d['usd']:,.2f} | {d['findings']} | ${d['at_stake_usd']:,.2f} | "
+                   f"{_cell('; '.join(d['detectors']))} |")
     totals: dict[str, list[float]] = defaultdict(lambda: [0, 0.0])
     for f in report.findings:
         totals[f.detector][0] += f.count
@@ -1056,9 +1191,10 @@ def markdown(report: Report, top: int = 20) -> str:
     corr = [f for f in report.findings if f.detector == "user-correction"]
     if corr:
         out += ["", "## Corrections (learning-loop candidates)", "",
-                "| Session | Repo | When | Corrections | Work before them | Categories |", "|---|---|---|---|---|---|"]
+                "| Session | Project | Department | When | Corrections | Work before them | Categories |",
+                "|---|---|---|---|---|---|---|"]
         for f in sorted(corr, key=lambda f: -f.count)[:top]:
-            out.append(f"| {short_id(f.session)} | {f.repo} | {f.when} | {f.count} | ${f.usd:,.2f} | "
+            out.append(f"| {short_id(f.session)} | {f.project} | {f.department} | {f.when} | {f.count} | ${f.usd:,.2f} | "
                        f"{_cell('; '.join(i for i in f.items if '×' in i))} |")
     perm = [f for f in report.findings if f.detector == "permission-prompts"]
     if perm:
@@ -1070,10 +1206,10 @@ def markdown(report: Report, top: int = 20) -> str:
         out += ["", "## Permission prompts", "",
                 f"{sum(f.count for f in perm)} approvals in {len(perm)} sessions; most asked: "
                 + ", ".join(_top(heads, 8))]
-    out += ["", "## By repo", "", "| Repo | Sessions | Cost | Subagents | Factory runs | Cache read share |",
+    out += ["", "## By project", "", "| Project | Sessions | Cost | Subagents | Factory runs | Cache read share |",
             "|---|---|---|---|---|---|"]
-    for r in report.repos:
-        out.append(f"| {r['repo']} | {r['sessions']} | ${r['usd']:,.2f} | ${r['subagent_usd']:,.2f} | "
+    for r in report.projects:
+        out.append(f"| {r['project']} | {r['sessions']} | ${r['usd']:,.2f} | ${r['subagent_usd']:,.2f} | "
                    f"${r['factory_run_usd']:,.2f} | {r['cache_read_share']:.0%} |")
     if report.errors:
         out += ["", "Problems: " + "; ".join(report.errors)]
@@ -1099,7 +1235,7 @@ def timeline(s: Session) -> list[dict]:
 
 
 def show_text(s: Session) -> str:
-    head = (f"session {s.id} · {s.repo} · {s.origin}{' ' + s.capability if s.capability else ''} · branch {s.branch or '?'}"
+    head = (f"session {s.id} · {s.repo} · {s.department} · {s.origin}{' ' + s.capability if s.capability else ''} · branch {s.branch or '?'}"
             f" · {len(s.turns)} requests · ${s.usd:,.2f} · {len(s.compactions)} compactions · "
             f"{sum(p.kind == 'typed' for p in s.prompts)} prompts")
     lines = [head, f"{'turn':>5}  {'when':16}  {'tool':12}  {'result':>7}  {'$':>7}  flags  target"]

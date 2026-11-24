@@ -2,6 +2,8 @@
 name: efficiency
 description: Finds where agent sessions, factory runs and an app's own model calls waste tokens or repeat work — scans the transcripts and runtime usage, samples the worst sessions, and turns each pattern into a concrete fix (skill line, hook, CLAUDE.md change, script, model switch, cache) filed as a task or a small factory PR. Use when asked to review token spend, session efficiency or agent waste, or when a scheduled factory efficiency run starts.
 argument-hint: "[--since 7d] [--all] [--report-only]"
+metadata:
+  department: Upkeep
 ---
 
 # Efficiency
@@ -18,14 +20,17 @@ file contents or tool output in a task, PR, commit or report.
 ## 1. Scan
 
 `factory efficiency scan --json` (add `--since`, or `--all` when `[efficiency] scope = "all"` or asked). Each finding
-has `detector`, `usd` (at stake: an upper bound, findings overlap), `tokens`, `count`, `session`, `items`. Read the
-`errors` too: a failing `runtime_usage` command is itself a finding for that repo.
+has `detector`, `project`, `department`, `usd` (at stake: an upper bound, findings overlap), `tokens`, `count`,
+`session`, `items`; `departments` totals them. Read the `errors` too: a failing `runtime_usage` command is itself a
+finding for that repo.
 
-## 2. Group into patterns
+## 2. Group into patterns, by owner
 
-A fix removes a pattern, not one session's symptom. Group findings by cause across sessions:
-same file re-read everywhere, the same command polled, the same skill loaded and never used, the same job on a
-top-tier model. Rank patterns by total `usd`, then by how often they recur. Keep at most `[efficiency] max_tasks`.
+A fix removes a pattern, not one session's symptom. Group findings by department first (the owner of the skills,
+agents and runs the fix changes), then by cause across sessions: same file re-read everywhere, the same command
+polled, the same skill loaded and never used, the same job on a top-tier model. Rank patterns by total `usd`, then
+by how often they recur. Keep at most `[efficiency] max_tasks`. `Direct` is the principal's own sessions: its fixes
+go to CLAUDE.md, hooks and defaults, or to declaring an owner for the skills it ran.
 
 ## 3. Sample the worst
 
@@ -50,8 +55,8 @@ would have prevented it (the learning loop).
 | permission-prompts | allowlist the safe read-only commands (`[agent] extra_allowed_tools` or the repo's settings) |
 | runtime-* | a prompt cache, a cheaper model tier for the job, a retry policy, dropping the unused job |
 
-State the fix exactly (the line, the hook, the config key), where it goes, the evidence (findings, sessions, $) and
-the expected saving.
+State the fix exactly (the line, the hook, the config key), where it goes, the owning department, the evidence
+(findings, sessions, $) and the expected saving.
 
 ## 5. File
 
@@ -64,6 +69,6 @@ the expected saving.
 
 ## 6. Report
 
-Write the digest to `$FACTORY_REPORT` (never `git add` it) and print it last: the window and totals, the top
-patterns with $ at stake and the fix filed for each (link), corrections worth a rule, and what was left for next run.
+Write the digest to `$FACTORY_REPORT` (never `git add` it) and print it last: the window and totals, then per
+department the top patterns with $ at stake and the fix filed for each (link), corrections worth a rule, and what was left for next run.
 Plain words; no colour-only signals.

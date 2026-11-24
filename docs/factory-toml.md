@@ -62,7 +62,7 @@ since = "7d"                  # the window a run looks back over (7d, 24h, 2w or
 sources = ["sessions", "runs", "runtime"]   # dev sessions, the factory's own runs, the app's runtime usage
 repos = []                    # more repo paths whose sessions count as this repo's
 projects_dir = "~/.claude/projects"         # where the agent client keeps session transcripts
-runtime_usage = ""            # command printing the app's model usage as JSONL (schema in the F-32 spec);
+runtime_usage = ""            # command printing the app's model usage as JSONL (schema v2 in the F-32 spec, with its own departments);
                               # {since} = the window start, ISO 8601, shell-quoted; runs in the repo root
 thresholds = {}               # e.g. { repeat_read_min = 4, min_usd = 1 }; every key and default: DEFAULT_THRESHOLDS
                               # in sfactory/config.py

@@ -201,7 +201,7 @@ class SessionDetectorTests(Base):
         self.assertEqual((spawn.session, spawn.count, spawn.items), ("parent", 3, ["general-purpose ×3"]))
         reread = self.found(report, "subagent-reread")
         self.assertEqual(len(reread), 3)
-        self.assertEqual({f.repo for f in reread}, {"repo"})  # a subagent belongs to its parent's repo
+        self.assertEqual({f.project for f in reread}, {"repo"})  # a subagent belongs to its parent's repo
 
     def test_corrections_keep_the_category_never_the_text(self):
         t = Transcript(self.repo)
@@ -251,7 +251,63 @@ class SessionDetectorTests(Base):
         (dup,) = self.found(self.scan('thresholds = { min_usd = 0 }\n'), "duplicate-effort")
         self.assertEqual(sorted(dup.sessions), ["wt1", "wt2"])
         self.assertEqual(dup.items, files)
-        self.assertEqual(dup.repo, "repo")
+        self.assertEqual(dup.project, "repo")
+
+
+class DepartmentTests(Base):
+    def declare(self, rel: str, department: str, nested: bool = True) -> None:
+        f = self.repo / ".claude" / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        decl = f"metadata:\n  department: {department}\n" if nested else f"department: {department}\n"
+        name = f.parent.name if f.name == "SKILL.md" else f.stem
+        f.write_text(f"---\nname: {name}\ndescription: d\n{decl}---\nbody\n")
+
+    def session(self, sid: str, skills=(), spawn: str = "", cwd: Path | None = None) -> None:
+        t = Transcript(cwd or self.repo)
+        for skill in skills:
+            t.call("Skill", {"skill": skill})
+        for _ in range(3):
+            t.call("Bash", {"command": "make lint"})
+        if spawn:
+            t.call("Agent", {"subagent_type": spawn, "prompt": "x"})
+        path = self.save(t, sid)
+        if spawn:
+            child = Transcript(self.dir / "elsewhere", start=t.t + 5)
+            for _ in range(3):
+                child.call("Bash", {"command": "make test"})
+            sub = child.write(path.with_suffix("") / "subagents" / f"agent-{sid}.jsonl")
+            sub.with_suffix(".meta.json").write_text(json.dumps({"agentType": spawn}))
+
+    def depts(self, report) -> dict[str, str]:
+        return {f.session: f.department for f in report.findings if f.detector == "repeat-call"}
+
+    def test_last_declared_skill_then_subagent_type_then_parent_then_direct(self):
+        self.declare("skills/review-code/SKILL.md", "quality")  # case and spelling normalised
+        self.declare("skills/design-task/SKILL.md", "Product")
+        self.declare("agents/ux-designer.md", "Design", nested=False)
+        self.session("reviewed", skills=["design-task", "review-code", "undeclared"], spawn="ux-designer")
+        self.session("plain", spawn="general-purpose")
+        report = self.scan('thresholds = { min_usd = 0 }\n')
+        self.assertEqual(self.depts(report), {
+            "reviewed": "Quality",  # the last skill that declares one
+            "agent-reviewed": "Design",  # a declared subagent type
+            "plain": "Direct",  # nothing declared: the principal's own work
+            "agent-plain": "Direct",  # an undeclared type inherits its parent
+        })
+        self.assertIn("## By department", efficiency.markdown(report))
+        self.assertEqual({d["department"] for d in report.departments}, {"Quality", "Design", "Direct"})
+
+    def test_a_factory_run_belongs_to_its_capability_skill(self):
+        run = self.dir / "home" / "runs" / "repo" / "efficiency-20261101-0600"
+        run.mkdir(parents=True)
+        old = efficiency.runner.HOME
+        efficiency.runner.HOME = self.dir / "home"
+        try:
+            self.session("run", cwd=run)
+            self.assertEqual(self.depts(self.scan('thresholds = { min_usd = 0 }\n')), {"run": "Upkeep"})
+        finally:
+            efficiency.runner.HOME = old
+        self.assertEqual(efficiency.Org([]).of("factory:efficiency"), "Upkeep")  # the skill's own declaration
 
 
 class ScopeAndPrivacyTests(Base):
@@ -266,9 +322,21 @@ class ScopeAndPrivacyTests(Base):
     def test_scope_is_this_repo_unless_all(self):
         self._two_repos()
         mine = self.scan('thresholds = { min_usd = 0 }\n')
-        self.assertEqual((mine.sessions, {f.repo for f in mine.findings}), (1, {"repo"}))
+        self.assertEqual((mine.sessions, {f.project for f in mine.findings}), (1, {"repo"}))
         every = self.scan('thresholds = { min_usd = 0 }\n', all_repos=True)
-        self.assertEqual((every.sessions, {f.repo for f in every.findings}), (2, {"repo", "other"}))
+        self.assertEqual((every.sessions, {f.project for f in every.findings}), (2, {"repo", "other"}))
+
+    def test_spend_counts_each_request_once_and_only_inside_the_window(self):
+        t = Transcript(self.repo, start=time.time() - 10 * 86400)
+        t.turn(ctx=100000, write=0)  # ten days ago: outside a 7-day window
+        t.t = time.time() - 3600
+        t.turn(ctx=100000, write=0)
+        self.save(t, "original")
+        self.save(t, "resumed")  # a resumed session copies the same messages into its own file
+        report = self.scan()
+        one = efficiency.Turn(ts=0, model=MODEL, input=10, cache_read=99990, output=200).usd
+        self.assertAlmostEqual(report.usd, round(one, 2))
+        self.assertEqual(report.sessions, 2)
 
     def test_disabled_detectors_ignore_globs_and_min_usd(self):
         self._two_repos()
@@ -313,11 +381,13 @@ class ScopeAndPrivacyTests(Base):
 class RuntimeTests(Base):
     def _records(self) -> list[dict]:
         now = dt.datetime.now(dt.timezone.utc).isoformat()
-        same = {"ts": now, "agent": "analyst", "task": "summarise", "model": "claude-opus-4-5", "input_tokens": 3000,
-                "output_tokens": 120, "cost_usd": 0.5, "prompt_hash": "h1"}
+        same = {"v": 2, "ts": now, "agent": "analyst", "task": "summarise", "model": "claude-opus-4-5",
+                "input_tokens": 3000, "output_tokens": 120, "cost_usd": 0.5, "prompt_hash": "h1",
+                "department": "Investment", "process": "daily-brief"}
+        v1 = {k: v for k, v in same.items() if k not in ("v", "department", "process")}
         return ([same] * 6
                 + [{**same, "prompt_hash": "h2", "outcome": "error"}]
-                + [{**same, "prompt_hash": "h3", "output_used": False, "task": "draft"}])
+                + [{**v1, "prompt_hash": "h3", "output_used": False, "task": "draft"}])
 
     def test_runtime_detectors_from_the_repo_command(self):
         data = self.dir / "usage.jsonl"
@@ -330,7 +400,13 @@ class RuntimeTests(Base):
         self.assertEqual(self.found(report, "runtime-retry")[0].count, 1)
         self.assertEqual(self.found(report, "runtime-unused")[0].usd, 0.5)
         (exp,) = self.found(report, "runtime-expensive-model")
-        self.assertIn("analyst / summarise", exp.what)
+        self.assertIn("analyst / summarise (process daily-brief)", exp.what)
+        # v2 carries the app's own department through; a v1 line still reads, unassigned
+        self.assertEqual((rep.department, exp.department), ("Investment", "Investment"))
+        self.assertEqual(self.found(report, "runtime-unused")[0].department, "unassigned")
+        self.assertIn("| Investment |", efficiency.markdown(report))
+        _, errors = efficiency.parse_runtime(json.dumps({"v": 3, "ts": "2026-11-01T00:00:00Z", "model": "m"}))
+        self.assertEqual(errors, ["runtime usage line 1: schema v3 is newer than this reader (v2)"])
 
     def test_missing_cost_is_priced_and_a_failing_command_is_reported_quietly(self):
         recs, errors = efficiency.parse_runtime(json.dumps(
