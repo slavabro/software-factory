@@ -1,7 +1,9 @@
 # F-25 design: the Factory Desk (management dashboard)
 
-One page on the home machine where the principal sees what the factory is doing for every project and turns things
-on and off, without a terminal. Mockup (interactive, sample data marked): https://claude.ai/artifact/DEoZ3SSHqqgNo5y21Ur5Vc
+One page on the home machine: the factory's admin panel. The principal sees the factory's health and what it can do,
+registers projects, configures each project's SDLC ([sdlc.md](sdlc.md)), and turns things on and off without a
+terminal. The day-to-day work (tasks in flight, PRs waiting, agents' questions) is not here: each developer handles
+it in their own tool (D-13). Mockup (interactive, sample data marked): https://claude.ai/artifact/DEoZ3SSHqqgNo5y21Ur5Vc
 
 Not real time: pages read fresh on load and the principal reloads; nothing polls or streams.
 
@@ -27,9 +29,10 @@ Semantics the page states where the button is:
 - **Remove a repo** deletes its schedules (reconcile) and lists the runs still open; they finish, nothing new starts.
   **Add a repo** requires a `.factory.toml` on its default branch, then reconciles (new schedules start paused).
 
-Out of scope: a cost view of its own (F-33's page); anything a product's own dashboards show. Designing processes
-(team schedules and prompts included, which are no longer `.factory.toml` keys) is the SDLC designer's job
-([sdlc.md](sdlc.md), D-6, D-10).
+Out of scope: a cost view of its own (F-33's page); anything a product's own dashboards show; the day-to-day work
+(D-13: F-26 removes the open factory PRs from Projects, and Needs you keeps only admin items). Configuring each
+project's lifecycle, checks, checkpoints and recurring processes (team schedules included, which leave
+`.factory.toml`) is [sdlc.md](sdlc.md)'s (D-6, D-10).
 
 ## How it is built
 
