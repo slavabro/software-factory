@@ -2,6 +2,8 @@
 name: upgrade
 description: Upgrades a repo's dependencies end to end — scans what can move, reads every release note in between, changes the code for breaking changes and deprecations, proves the code still works with the repo's own checks, and lands grouped upgrade PRs through the repo's gate; risky moves and new capabilities become tasks. Use when asked to upgrade or update dependencies, check for new versions, or when a scheduled factory upgrade run starts.
 argument-hint: "[package ...] [--report-only]"
+metadata:
+  department: Upkeep
 ---
 
 # Upgrade

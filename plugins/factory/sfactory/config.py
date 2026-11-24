@@ -71,6 +71,52 @@ class Specs:
     resolver: str = "pytest"  # how a `Proven by:` entry is found without running it (sfactory/specs.py RESOLVERS)
 
 
+# The efficiency scout's detector thresholds (docs/factory-toml.md → [efficiency]); a repo overrides any of them.
+DEFAULT_THRESHOLDS: dict[str, float] = {
+    "min_usd": 0.25,  # a finding below this ($ at stake) is not reported
+    "repeat_read_min": 3,  # reads of one file in one session (no edit or compaction in between)
+    "big_read_tokens": 8000,  # a whole-file Read returning more than this
+    "oversized_tokens": 6000,  # any other tool result larger than this
+    "repeat_call_min": 3,  # identical tool calls in one session
+    "retry_window": 3,  # a failed call repeated unchanged within this many calls
+    "cache_gap_seconds": 300,  # a pause longer than this lets the prompt cache expire
+    "cache_rebuild_tokens": 20000,  # a cache write this large mid-session is a rebuild
+    "long_context_tokens": 150000,  # context carried above this, turn after turn, without compaction
+    "max_subagents": 6,  # subagents spawned by one session
+    "base_context_tokens": 30000,  # what a session loads before its first prompt (system, tools, CLAUDE.md, skills)
+    "duplicate_shared_files": 3,  # sessions in different worktrees editing this many of the same files
+    "duplicate_overlap": 0.6,  # … and this share of the smaller session's edited files
+    "poll_min": 5,  # sleeps and status checks in one session
+    "permission_prompts": 5,  # tool calls the user had to approve in one session
+    "runtime_repeat_min": 3,  # runtime calls with the same prompt hash
+    "runtime_trivial_output_tokens": 500,  # median output of a job an expensive model is wasted on
+}
+DEFAULT_POLL_COMMANDS = ["gh pr checks", "gh run view", "gh run watch", "gh run list", "gh pr view", "docker ps"]
+EFFICIENCY_SOURCES = ("sessions", "runs", "runtime")
+
+
+@dataclass
+class Efficiency:
+    enabled: bool = False  # the engine's team `efficiency`; `factory efficiency scan` works either way
+    schedule: str = "0 7 * * 1"  # cron in the engine's time zone; "off" = manual runs only
+    scope: str = "repo"  # what a run scans: "repo" (this repo, its worktrees and `repos`) or "all" (every project)
+    since: str = "7d"  # the window a run looks back over
+    sources: list[str] = field(default_factory=lambda: list(EFFICIENCY_SOURCES))
+    repos: list[str] = field(default_factory=list)  # more repo paths whose sessions count as this repo's
+    projects_dir: str = "~/.claude/projects"  # where the agent client keeps session transcripts
+    runtime_usage: str = ""  # command printing the app's own model usage as JSONL ({since} = ISO date, quoted)
+    thresholds: dict = field(default_factory=dict)  # overrides of DEFAULT_THRESHOLDS
+    disabled: list[str] = field(default_factory=list)  # detector names not run
+    ignore: list[str] = field(default_factory=list)  # globs of session working dirs and file paths left out
+    poll_commands: list[str] = field(default_factory=lambda: list(DEFAULT_POLL_COMMANDS))
+    corrections: list[str] = field(default_factory=list)  # regexes for a correcting prompt; empty = the defaults
+    expensive_models: list[str] = field(default_factory=lambda: ["*opus*"])  # globs: a top-tier model
+    max_tasks: int = 5  # tasks or PRs one run files
+
+    def limit(self, name: str) -> float:
+        return self.thresholds.get(name, DEFAULT_THRESHOLDS[name])
+
+
 # Why a team is woken besides its schedule (engine events, docs/designs/engine.md).
 WAKE_REASONS = ("ci_red", "deploy_failed", "incident", "merged")
 
@@ -112,15 +158,18 @@ class Config:
     report_with: str = ""  # shell command run with {file} = the run's digest; empty = path printed to the log
     upgrade: Upgrade = field(default_factory=Upgrade)
     specs: Specs = field(default_factory=Specs)
+    efficiency: Efficiency = field(default_factory=Efficiency)
     extra_teams: dict[str, Team] = field(default_factory=dict)  # [teams.<name>]
 
     def teams(self) -> dict[str, Team]:
-        """Every team the engine runs here. The upgrade capability is the team `upgrade`, configured by [upgrade]."""
+        """Every team the engine runs here. The upgrade and efficiency capabilities are the teams `upgrade` and
+        `efficiency`, each configured by its own section."""
         teams = dict(self.extra_teams)
-        if self.upgrade.enabled:
-            teams["upgrade"] = Team(
-                prompt="/factory:upgrade", schedule=self.upgrade.schedule, budget_minutes=self.agent_timeout_minutes
-            )
+        for name, section in (("upgrade", self.upgrade), ("efficiency", self.efficiency)):
+            if section.enabled:
+                teams[name] = Team(
+                    prompt=f"/factory:{name}", schedule=section.schedule, budget_minutes=self.agent_timeout_minutes
+                )
         return teams
 
 
@@ -138,6 +187,7 @@ SECTIONS = {
     "report": {"with"},
     "upgrade": {f.name for f in fields(Upgrade)},
     "specs": {f.name for f in fields(Specs)},
+    "efficiency": {f.name for f in fields(Efficiency)},
     "teams": set(),  # one table per team, keys TEAM_KEYS
 }
 TEAM_KEYS = {f.name for f in fields(Team)}
@@ -156,7 +206,7 @@ def _check(raw: dict, path: Path) -> None:
         for key in body:
             if key not in SECTIONS[section]:
                 raise ConfigError(f"{path}: unknown key {section}.{key} (known: {', '.join(sorted(SECTIONS[section]))})")
-    for section, defaults in (("upgrade", Upgrade()), ("specs", Specs())):
+    for section, defaults in (("upgrade", Upgrade()), ("specs", Specs()), ("efficiency", Efficiency())):
         for key, value in raw.get(section, {}).items():
             want = type(getattr(defaults, key))
             if not isinstance(value, want) or (want is int and isinstance(value, bool)):
@@ -175,6 +225,25 @@ def _check(raw: dict, path: Path) -> None:
             re.compile(str(pattern))
         except re.error as e:
             raise ConfigError(f"{path}: tasks.id_pattern is not a regular expression ({e})") from None
+    _check_efficiency(raw.get("efficiency", {}), path)
+
+
+def _check_efficiency(eff: dict, path: Path) -> None:
+    for key, value in eff.get("thresholds", {}).items():
+        if key not in DEFAULT_THRESHOLDS:
+            raise ConfigError(f"{path}: unknown efficiency.thresholds.{key} (known: {', '.join(sorted(DEFAULT_THRESHOLDS))})")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ConfigError(f"{path}: efficiency.thresholds.{key} must be a number")
+    if eff.get("scope", "repo") not in ("repo", "all"):
+        raise ConfigError(f'{path}: efficiency.scope must be "repo" or "all"')
+    bad = [s for s in eff.get("sources", []) if s not in EFFICIENCY_SOURCES]
+    if bad:
+        raise ConfigError(f"{path}: efficiency.sources: unknown {', '.join(bad)} (known: {', '.join(EFFICIENCY_SOURCES)})")
+    for pattern in eff.get("corrections", []):
+        try:
+            re.compile(pattern)
+        except re.error as exc:
+            raise ConfigError(f"{path}: efficiency.corrections: bad pattern {pattern!r}: {exc}") from None
 
 
 def _check_teams(teams: dict, path: Path) -> None:
@@ -183,8 +252,8 @@ def _check_teams(teams: dict, path: Path) -> None:
         where = f"{path}: teams.{name}"
         if not TEAM_NAME.fullmatch(name):
             raise ConfigError(f"{where}: a team name is lowercase letters, digits and dashes")
-        if name == "upgrade":
-            raise ConfigError(f"{where}: the upgrade team is configured by [upgrade]")
+        if name in ("upgrade", "efficiency"):
+            raise ConfigError(f"{where}: the {name} team is configured by [{name}]")
         if not isinstance(body, dict):
             raise ConfigError(f"{where} must be a table")
         for key, value in body.items():
@@ -253,5 +322,7 @@ def parse(root: Path, text: str | None, path: Path) -> Config:
         setattr(cfg.upgrade, key, value)
     for key, value in raw.get("specs", {}).items():
         setattr(cfg.specs, key, value)
+    for key, value in raw.get("efficiency", {}).items():
+        setattr(cfg.efficiency, key, value)
     cfg.extra_teams = {name: Team(**body) for name, body in raw.get("teams", {}).items()}
     return cfg
